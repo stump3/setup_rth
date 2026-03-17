@@ -2156,7 +2156,26 @@ EOF
 
     # Сервис
     systemctl daemon-reload
+    # Открываем порт 80 для ACME HTTP-01 challenge
+    if command -v ufw &>/dev/null; then
+        ufw allow 80/tcp >/dev/null 2>&1
+        ufw --force enable >/dev/null 2>&1
+        ok "UFW: временно открыт порт 80 для получения сертификата"
+    fi
     systemctl enable --now "$HYSTERIA_SVC"
+    # Ждём получения сертификата (до 30 сек)
+    local i=0
+    while [ $i -lt 30 ]; do
+        if journalctl -u "$HYSTERIA_SVC" -n 20 --no-pager 2>/dev/null | grep -q "server up and running"; then
+            break
+        fi
+        sleep 1; i=$((i+1))
+    done
+    # Закрываем порт 80
+    if command -v ufw &>/dev/null; then
+        ufw delete allow 80/tcp >/dev/null 2>&1
+        ok "UFW: порт 80 закрыт"
+    fi
     ok "Сервис $HYSTERIA_SVC запущен"
 
     # UFW
@@ -2165,7 +2184,7 @@ EOF
         ufw allow "${port}/udp" >/dev/null 2>&1
         ufw allow "${port}/tcp" >/dev/null 2>&1
         ufw --force enable      >/dev/null 2>&1
-        ok "UFW: открыт ${port}/udp и ${port}/tcp (80/443 не трогаем)"
+        ok "UFW: открыт ${port}/udp и ${port}/tcp"
     fi
 
     # URI и файлы
