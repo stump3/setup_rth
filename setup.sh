@@ -2525,7 +2525,7 @@ hysteria_add_user() {
     for f in "$users_file" "$main_file"; do
         [ -f "$f" ] || continue
         while IFS= read -r line; do
-            local n; n=$(echo "$line" | sed 's/.*#//')
+            local n; n=$(echo "$line" | grep -a "hy2://" | sed 's/.*#//')
             [ -n "$n" ] && existing_names+=("$n")
         done < "$f"
     done
@@ -2762,7 +2762,7 @@ hysteria_show_links() {
     for f in "/root/hysteria-${dom}-users.txt" "/root/hysteria-${dom}.txt"; do
         [ -f "$f" ] || continue
         local found_name
-        found_name=$(grep "hy2://${selected}:" "$f" 2>/dev/null | sed 's/.*#//' | tail -1)
+        found_name=$(grep -a "hy2://${selected}:" "$f" 2>/dev/null | sed 's/.*#//' | tail -1)
         if [ -n "$found_name" ]; then
             conn_name="$found_name"
             break
