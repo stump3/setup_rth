@@ -1490,6 +1490,60 @@ telemt_menu_add_user() {
     header "Ссылки"; telemt_fetch_links
 }
 
+telemt_menu_delete_user() {
+    header "Удалить пользователя"
+    [ ! -f "$TELEMT_CONFIG_FILE" ] && die "Конфиг не найден."
+
+    # Собираем список пользователей из [access.users]
+    local -a users=()
+    while IFS= read -r line; do
+        local u; u=$(echo "$line" | sed 's/ =.*//' | tr -d ' ')
+        [ -n "$u" ] && users+=("$u")
+    done < <(awk '/^\[access\.users\]/{f=1;next} f&&/^\[/{exit} f&&/=/{print}' "$TELEMT_CONFIG_FILE")
+
+    if [ ${#users[@]} -eq 0 ]; then
+        warn "Пользователи не найдены в конфиге"; return 1
+    fi
+
+    echo -e "  ${WHITE}Выберите пользователя для удаления:${NC}"
+    echo ""
+    local i=1
+    for u in "${users[@]}"; do
+        echo -e "  ${BOLD}${i})${RESET} ${u}"
+        i=$((i+1))
+    done
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    [[ "$ch" == "0" ]] && return
+    if ! [[ "$ch" =~ ^[0-9]+$ ]] || [ "$ch" -lt 1 ] || [ "$ch" -gt ${#users[@]} ]; then
+        warn "Неверный выбор"; return 1
+    fi
+
+    local selected="${users[$((ch-1))]}"
+    read -rp "  Удалить '${selected}'? (y/N): " confirm < /dev/tty
+    [[ "${confirm:-N}" =~ ^[yY]$ ]] || { warn "Отменено"; return; }
+
+    # Удаляем строку пользователя из [access.users]
+    sed -i "/^${selected} = /d" "$TELEMT_CONFIG_FILE"
+    # Удаляем секцию [access.user_limits.USERNAME] если есть
+    sed -i "/^\[access\.user_limits\.${selected}\]/,/^\[/{/^\[access\.user_limits\.${selected}\]/d; /^\[/!{/^$/d; d}}" "$TELEMT_CONFIG_FILE"
+
+    success "Пользователь '${selected}' удалён"
+
+    # Hot reload
+    if telemt_is_running; then
+        if [ "$TELEMT_MODE" = "systemd" ]; then
+            info "Hot reload..."
+            systemctl reload telemt 2>/dev/null || systemctl restart telemt
+        else
+            cd "$TELEMT_WORK_DIR_DOCKER" && docker compose restart telemt >/dev/null 2>&1
+        fi
+        sleep 1
+        ok "Конфиг применён"
+    fi
+}
+
 telemt_menu_links()  { header "Пользователи и ссылки"; telemt_is_running || die "Сервис не запущен."; telemt_fetch_links; }
 
 telemt_menu_status() {
@@ -1662,29 +1716,113 @@ for u in users:
     fi
 }
 
+telemt_menu_migrate_docker() {
+    header "Миграция MTProxy (Docker) на новый сервер"
+    need_root
+    [ "$TELEMT_MODE" != "docker" ] && die "Эта функция только для Docker-режима."
+    [ ! -f "$TELEMT_CONFIG_FILE" ] && die "Конфиг не найден: $TELEMT_CONFIG_FILE"
+    [ ! -f "$TELEMT_COMPOSE_FILE" ] && die "docker-compose.yml не найден: $TELEMT_COMPOSE_FILE"
+    ensure_sshpass
+
+    echo -e "${BOLD}Данные нового сервера:${RESET}"; echo ""
+    local nh np nu npass
+    read -rp "  IP нового сервера: " nh; [ -z "$nh" ] && die "Адрес не может быть пустым"
+    read -rp "  SSH порт [22]: " np; np="${np:-22}"
+    read -rp "  Пользователь [root]: " nu; nu="${nu:-root}"
+    read -rsp "  Пароль: " npass; echo ""; [ -z "$npass" ] && die "Пароль не может быть пустым"
+
+    local SO="-p $np -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+    RRUN() { sshpass -p "$npass" ssh $SO "${nu}@${nh}" "$@"; }
+    RSCP() { sshpass -p "$npass" scp -P "$np" -o StrictHostKeyChecking=accept-new "$1" "${nu}@${nh}:$2"; }
+
+    RRUN "echo ok" &>/dev/null || die "Не удалось подключиться к ${nh}."
+    success "SSH подключение успешно"
+
+    local cur_port cur_domain
+    cur_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" | head -1 | grep -oE "[0-9]+" || echo "8443")
+    cur_domain=$(grep -E "^tls_domain\s*=" "$TELEMT_CONFIG_FILE" | head -1 | grep -oP '"K[^"]+' || echo "petrovich.ru")
+    echo ""; echo -e "${BOLD}Текущие настройки:${RESET} порт=$cur_port домен=$cur_domain"
+
+    local new_pp new_dom
+    read -rp "  Порт на новом сервере [Enter=$cur_port]: " new_pp; new_pp="${new_pp:-$cur_port}"
+    read -rp "  Домен-маскировка [Enter=$cur_domain]: " new_dom; new_dom="${new_dom:-$cur_domain}"
+
+    # Обновляем порт и домен в конфиге если изменились
+    local config_to_send
+    config_to_send=$(sed "s/^port = .*/port = $new_pp/; s/tls_domain.*=.*/tls_domain    = \"$new_dom\"/" "$TELEMT_CONFIG_FILE")
+
+    info "Проверяю Docker на новом сервере..."
+    RRUN "command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 && systemctl enable docker; }"         && success "Docker готов" || die "Не удалось установить Docker"
+
+    info "Копирую конфиг и compose файл..."
+    RRUN "mkdir -p $(dirname "$TELEMT_CONFIG_FILE") $(dirname "$TELEMT_COMPOSE_FILE")"
+    echo "$config_to_send" | RRUN "cat > $TELEMT_CONFIG_FILE"
+    RSCP "$TELEMT_COMPOSE_FILE" "$TELEMT_COMPOSE_FILE"
+    success "Файлы скопированы"
+
+    info "Запускаю контейнер на новом сервере..."
+    RRUN "cd $(dirname "$TELEMT_COMPOSE_FILE") && docker compose pull -q && docker compose up -d"         && success "Контейнер запущен" || die "Ошибка запуска контейнера"
+
+    # Открываем порт
+    RRUN "command -v ufw &>/dev/null && ufw allow ${new_pp}/tcp &>/dev/null || true"
+
+    # Проверяем ссылки
+    success "Миграция завершена!"
+    header "Новые ссылки"
+    echo -e "${BOLD}Новый IP:${RESET} $nh"
+    info "Жду запуска..."
+    sleep 5
+    local nl; nl=$(RRUN "curl -s --max-time 10 http://127.0.0.1:9091/v1/users 2>/dev/null" || true)
+    if echo "$nl" | grep -q "tg://proxy"; then
+        echo "$nl" | python3 -c "
+import sys,json
+BOLD='\033[1m'; CYAN='\033[0;36m'; RESET='\033[0m'
+data=json.load(sys.stdin); users=data if isinstance(data,list) else data.get('users',data.get('data',[]))
+if isinstance(users,dict): users=list(users.values())
+for u in users:
+    name=u.get('username') or u.get('name') or 'user'
+    tls=u.get('links',{}).get('tls',[])
+    print(f'{BOLD}{CYAN}┌─ {name}{RESET}')
+    if tls: print(f'{BOLD}│  Ссылка:{RESET}  {tls[0]}')
+    print(f'{BOLD}└{chr(9472)*44}{RESET}'); print()
+" 2>/dev/null
+        warn "Старый контейнер ещё работает. Когда будешь готов:"
+        echo -e "     ${CYAN}cd $(dirname "$TELEMT_COMPOSE_FILE") && docker compose down${NC}"
+    else
+        warn "Сервис запущен, но API пока не ответил. Проверь:"
+        echo -e "     ${CYAN}ssh ${nu}@${nh} curl -s http://127.0.0.1:9091/v1/users${NC}"
+    fi
+}
+
 telemt_main_menu() {
     local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
     header "telemt MTProxy [${mode_label}]"
     echo -e "  ${BOLD}1)${RESET} Установить"
     echo -e "  ${BOLD}2)${RESET} Добавить пользователя"
-    echo -e "  ${BOLD}3)${RESET} Пользователи и ссылки"
-    echo -e "  ${BOLD}4)${RESET} Статус и логи"
-    echo -e "  ${BOLD}5)${RESET} Обновить"
-    echo -e "  ${BOLD}6)${RESET} Остановить"
-    [ "$TELEMT_MODE" = "systemd" ] && echo -e "  ${BOLD}7)${RESET} Мигрировать на новый сервер"
-    echo -e "  ${BOLD}8)${RESET} Сменить режим (systemd ↔ Docker)"
+    echo -e "  ${BOLD}3)${RESET} Удалить пользователя"
+    echo -e "  ${BOLD}4)${RESET} Пользователи и ссылки"
+    echo -e "  ${BOLD}5)${RESET} Статус и логи"
+    echo -e "  ${BOLD}6)${RESET} Обновить"
+    echo -e "  ${BOLD}7)${RESET} Остановить"
+    echo -e "  ${BOLD}8)${RESET} Мигрировать на новый сервер"
+    echo -e "  ${BOLD}9)${RESET} Сменить режим (systemd ↔ Docker)"
     echo -e "  ${BOLD}0)${RESET} Назад"
     echo ""
     local ch; read -rp "Выбор: " ch
     case "$ch" in
         1) telemt_menu_install ;;
         2) telemt_menu_add_user ;;
-        3) telemt_menu_links ;;
-        4) telemt_menu_status ;;
-        5) telemt_menu_update ;;
-        6) telemt_menu_stop ;;
-        7) [ "$TELEMT_MODE" = "systemd" ] && telemt_menu_migrate || warn "Только для systemd" ;;
-        8) telemt_choose_mode; telemt_check_deps ;;
+        3) telemt_menu_delete_user ;;
+        4) telemt_menu_links ;;
+        5) telemt_menu_status ;;
+        6) telemt_menu_update ;;
+        7) telemt_menu_stop ;;
+        8) if [ "$TELEMT_MODE" = "systemd" ]; then
+               telemt_menu_migrate
+           else
+               telemt_menu_migrate_docker
+           fi ;;
+        9) telemt_choose_mode; telemt_check_deps ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
@@ -2279,6 +2417,51 @@ hysteria_restart() {
 }
 
 # ── Добавить пользователя ─────────────────────────────────────────
+# ── Удалить пользователя Hysteria2 ───────────────────────────────
+hysteria_delete_user() {
+    header "Hysteria2 — Удалить пользователя"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Конфиг не найден"; return 1; }
+
+    local -a users=()
+    while IFS= read -r line; do
+        local u; u=$(echo "$line" | sed 's/:.*//' | tr -d ' ')
+        [ -n "$u" ] && users+=("$u")
+    done < <(awk '/^  userpass:/,/^[^ ]/' "$HYSTERIA_CONFIG" | grep -E "^    [^:]+:")
+
+    if [ ${#users[@]} -eq 0 ]; then
+        warn "Пользователи не найдены в конфиге"; return 1
+    fi
+
+    echo -e "  ${WHITE}Выберите пользователя для удаления:${NC}"
+    echo ""
+    local i=1
+    for u in "${users[@]}"; do
+        echo -e "  ${BOLD}${i})${RESET} ${u}"
+        i=$((i+1))
+    done
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    [[ "$ch" == "0" ]] && return
+    if ! [[ "$ch" =~ ^[0-9]+$ ]] || [ "$ch" -lt 1 ] || [ "$ch" -gt ${#users[@]} ]; then
+        warn "Неверный выбор"; return 1
+    fi
+
+    local selected="${users[$((ch-1))]}"
+    read -rp "  Удалить '${selected}'? (y/N): " confirm < /dev/tty
+    [[ "${confirm:-N}" =~ ^[yY]$ ]] || { warn "Отменено"; return; }
+
+    # Удаляем строку из userpass
+    sed -i "/^    ${selected}:/d" "$HYSTERIA_CONFIG"
+
+    success "Пользователь '${selected}' удалён"
+
+    # Перезапускаем сервис
+    systemctl reload "$HYSTERIA_SVC" 2>/dev/null || systemctl restart "$HYSTERIA_SVC"
+    sleep 1
+    ok "Конфиг применён"
+}
+
 hysteria_add_user() {
     header "Hysteria2 — Добавить пользователя"
     [ -f "$HYSTERIA_CONFIG" ] || { warn "Конфиг не найден. Сначала установите Hysteria2"; return 1; }
@@ -2602,6 +2785,452 @@ hysteria_show_links() {
 }
 
 # ── Подменю Hysteria2 ─────────────────────────────────────────────
+# ── Merger-подписка (Remnawave + Hysteria2) ──────────────────────
+hysteria_setup_merger() {
+    header "Hysteria2 — Объединённая подписка"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Hysteria2 не установлена"; return 1; }
+    [ -d /opt/remnawave ] || { warn "Remnawave Panel не установлена"; return 1; }
+
+    local dom port
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
+    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+
+    # Собираем URI
+    local -a uris=()
+    for f in "/root/hysteria-${dom}.txt" "/root/hysteria-${dom}-users.txt"; do
+        [ -f "$f" ] || continue
+        while IFS= read -r line; do
+            [[ "$line" =~ ^hy2:// ]] && uris+=("$line")
+        done < "$f"
+    done
+
+    if [ ${#uris[@]} -eq 0 ]; then
+        warn "URI не найдены. Сначала установите Hysteria2."
+        return 1
+    fi
+
+    # Читаем SUB_PUBLIC_DOMAIN из .env панели
+    local sub_domain=""
+    [ -f /opt/remnawave/.env ] && sub_domain=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"' | cut -d'/' -f1)
+
+    if [ -z "$sub_domain" ]; then
+        read -rp "  Домен подписок Remnawave (например sub.example.com): " sub_domain < /dev/tty
+    else
+        info "Домен подписок: $sub_domain"
+    fi
+
+    # Путь для merger скрипта
+    local merger_dir="/var/www/html/merger"
+    local merger_script="/var/www/html/merger/merge.py"
+    local merger_port=8765
+
+    info "Установка зависимостей..."
+    apt-get install -y -q python3 python3-pip >/dev/null 2>&1
+    pip3 install aiohttp --break-system-packages -q 2>/dev/null || true
+
+    # Сохраняем URI в файл
+    mkdir -p "$merger_dir"
+    printf '%s
+' "${uris[@]}" > "${merger_dir}/hysteria_uris.txt"
+    ok "URI сохранены: ${merger_dir}/hysteria_uris.txt"
+
+    # Создаём merger скрипт
+    cat > "$merger_script" << 'PYEOF'
+#!/usr/bin/env python3
+import asyncio
+import base64
+import os
+from aiohttp import web, ClientSession, ClientTimeout
+
+UPSTREAM = os.environ.get("SUB_UPSTREAM", "https://sub.example.com")
+HY_FILE  = os.environ.get("HY_FILE", "/var/www/html/merger/hysteria_uris.txt")
+PORT     = int(os.environ.get("MERGER_PORT", "8765"))
+
+def load_hy_uris():
+    try:
+        with open(HY_FILE) as f:
+            return [l.strip() for l in f if l.strip().startswith("hy2://")]
+    except Exception:
+        return []
+
+async def handle(request):
+    token = request.match_info.get("token", "")
+    url   = f"{UPSTREAM}/{token}"
+    try:
+        timeout = ClientTimeout(total=10)
+        async with ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers={"User-Agent": request.headers.get("User-Agent","")}) as resp:
+                raw = await resp.read()
+    except Exception as e:
+        return web.Response(status=502, text=f"Upstream error: {e}")
+
+    # Декодируем base64
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8")
+        lines = [l for l in decoded.splitlines() if l.strip()]
+    except Exception:
+        lines = [l for l in raw.decode("utf-8","ignore").splitlines() if l.strip()]
+
+    # Добавляем Hysteria2
+    hy_uris = load_hy_uris()
+    lines.extend(hy_uris)
+
+    # Кодируем обратно в base64
+    merged = base64.b64encode("
+".join(lines).encode()).decode()
+    return web.Response(
+        text=merged,
+        content_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Subscription-Userinfo": resp.headers.get("Subscription-Userinfo",""),
+        }
+    )
+
+app = web.Application()
+app.router.add_get("/{token}", handle)
+app.router.add_get("/{token}/", handle)
+
+if __name__ == "__main__":
+    web.run_app(app, host="127.0.0.1", port=PORT)
+PYEOF
+
+    chmod +x "$merger_script"
+
+    # Создаём systemd сервис
+    cat > /etc/systemd/system/hy-merger.service << SVCEOF
+[Unit]
+Description=Hysteria2 Subscription Merger
+After=network.target
+
+[Service]
+Type=simple
+Environment=SUB_UPSTREAM=https://${sub_domain}
+Environment=HY_FILE=${merger_dir}/hysteria_uris.txt
+Environment=MERGER_PORT=${merger_port}
+ExecStart=/usr/bin/python3 ${merger_script}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    systemctl daemon-reload
+    systemctl enable --now hy-merger
+    sleep 2
+
+    if systemctl is-active --quiet hy-merger; then
+        ok "Merger запущен на порту $merger_port"
+    else
+        warn "Merger не запустился. Проверьте: journalctl -u hy-merger -n 20"
+        return 1
+    fi
+
+    # Добавляем location в nginx панели
+    if [ -f /opt/remnawave/nginx.conf ]; then
+        # Проверяем не добавлен ли уже
+        if grep -q "hy-merger" /opt/remnawave/nginx.conf; then
+            warn "Location для merger уже существует в nginx.conf"
+        else
+            # Добавляем location /merge/ в блок selfsteal сервера
+            local insert_after="root /var/www/html; index index.html;"
+            local new_location="root /var/www/html; index index.html;
+    location /merge/ {
+        proxy_pass http://127.0.0.1:${merger_port}/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }"
+            sed -i "s|${insert_after}|${new_location}|" /opt/remnawave/nginx.conf
+            cd /opt/remnawave && docker compose restart remnawave-nginx >/dev/null 2>&1
+            ok "Nginx обновлён"
+        fi
+    else
+        warn "nginx.conf не найден в /opt/remnawave/. Добавьте location вручную."
+    fi
+
+    # Определяем selfsteal домен
+    local selfsteal_dom=""
+    selfsteal_dom=$(grep -B5 "root /var/www/html" /opt/remnawave/nginx.conf 2>/dev/null | grep "server_name" | awk '{print $2}' | tr -d ';' | head -1)
+
+    echo ""
+    ok "Готово! Объединённая подписка доступна по адресу:"
+    echo ""
+    if [ -n "$selfsteal_dom" ]; then
+        echo -e "  ${CYAN}https://${selfsteal_dom}/merge/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
+    else
+        echo -e "  ${CYAN}https://SELFSTEAL_DOMAIN/merge/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
+    fi
+    echo ""
+    echo -e "  ${YELLOW}Замените ТОКЕН_ПОЛЬЗОВАТЕЛЯ на токен из панели Remnawave.${NC}"
+    echo -e "  ${YELLOW}Например: https://${selfsteal_dom:-SELFSTEAL_DOMAIN}/merge/uR5UffbwYXMA${NC}"
+    echo ""
+    echo -e "  Для обновления URI Hysteria2: пункт ${BOLD}7) Опубликовать подписку${RESET}"
+}
+
+# ── Публикация подписки через nginx ──────────────────────────────
+hysteria_publish_sub() {
+    header "Hysteria2 — Публикация подписки"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Hysteria2 не установлена"; return 1; }
+
+    local dom port
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
+    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+
+    # Собираем все URI из файлов
+    local users_file="/root/hysteria-${dom}-users.txt"
+    local main_file="/root/hysteria-${dom}.txt"
+    local -a uris=()
+    for f in "$main_file" "$users_file"; do
+        [ -f "$f" ] || continue
+        while IFS= read -r line; do
+            [[ "$line" =~ ^hy2:// ]] && uris+=("$line")
+        done < "$f"
+    done
+
+    if [ ${#uris[@]} -eq 0 ]; then
+        warn "URI не найдены. Сначала установите Hysteria2 и добавьте пользователей."
+        return 1
+    fi
+
+    info "Найдено URI: ${#uris[@]}"
+    echo ""
+
+    # Выбор метода публикации
+    echo -e "  ${WHITE}Метод публикации:${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} Через nginx панели (Remnawave)"
+    echo -e "     ${GRAY}Файл → /var/www/html/hy/sub.txt${NC}"
+    echo -e "     ${GRAY}URL  → https://SELFSTEAL_DOMAIN/hy/sub.txt${NC}"
+    echo ""
+    echo -e "  ${BOLD}2)${RESET} Только локальный файл"
+    echo -e "     ${GRAY}Файл → /root/hysteria-${dom}-sub.txt${NC}"
+    echo ""
+    echo -e "  ${BOLD}3)${RESET} Оба варианта"
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор [3]: " ch < /dev/tty
+    ch="${ch:-3}"
+
+    # Спрашиваем имя файла
+    local sub_name
+    read -rp "  Имя файла подписки [sub]: " sub_name < /dev/tty
+    sub_name="${sub_name:-sub}"
+
+    # Генерируем base64 контент (стандарт для подписок)
+    local sub_content
+    sub_content=$(printf '%s
+' "${uris[@]}" | base64 -w 0)
+
+    case "$ch" in
+        1|3)
+            local pub_dir="/var/www/html/hy"
+            mkdir -p "$pub_dir"
+            printf '%s
+' "${uris[@]}" | base64 -w 0 > "${pub_dir}/${sub_name}.txt"
+            # Также сохраняем plain-text версию
+            printf '%s
+' "${uris[@]}" > "${pub_dir}/${sub_name}-plain.txt"
+            ok "Файл создан: ${pub_dir}/${sub_name}.txt"
+            echo ""
+            # Определяем selfsteal домен из nginx конфига
+            local selfsteal_dom=""
+            if [ -f /opt/remnawave/nginx.conf ]; then
+                selfsteal_dom=$(grep -A2 "root /var/www/html" /opt/remnawave/nginx.conf | grep "server_name" | awk '{print $2}' | tr -d ';' | head -1)
+            fi
+            echo -e "  ${WHITE}Ссылки на подписку:${NC}"
+            echo ""
+            if [ -n "$selfsteal_dom" ]; then
+                echo -e "  ${CYAN}Base64 (v2rayNG, Hiddify):${NC}"
+                echo -e "  https://${selfsteal_dom}/hy/${sub_name}.txt"
+                echo ""
+                echo -e "  ${CYAN}Plain URI (Streisand, Shadowrocket):${NC}"
+                echo -e "  https://${selfsteal_dom}/hy/${sub_name}-plain.txt"
+            else
+                echo -e "  ${CYAN}Base64:${NC}  https://ВАША_SELFSTEAL_DOMAIN/hy/${sub_name}.txt"
+                echo -e "  ${CYAN}Plain:${NC}   https://ВАША_SELFSTEAL_DOMAIN/hy/${sub_name}-plain.txt"
+                warn "Не удалось определить selfsteal домен. Замените ВАША_SELFSTEAL_DOMAIN вручную."
+            fi
+            echo ""
+            ;;&
+        2|3)
+            local local_file="/root/hysteria-${dom}-${sub_name}.txt"
+            printf '%s
+' "${uris[@]}" > "$local_file"
+            ok "Локальный файл: $local_file"
+            ;;&
+        0) return ;;
+    esac
+
+    echo ""
+    echo -e "  ${YELLOW}Добавьте ссылку как отдельную подписку в клиент.${NC}"
+    echo -e "  ${YELLOW}Поддерживают: v2rayNG, Hiddify, Streisand, Shadowrocket, Clash.${NC}"
+}
+
+# ── Merged подписка (Remnawave + Hysteria2) ──────────────────────
+hysteria_merge_sub() {
+    header "Hysteria2 — Объединённая подписка"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Hysteria2 не установлена"; return 1; }
+    command -v python3 &>/dev/null || { warn "Требуется python3"; return 1; }
+
+    local dom
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
+
+    # Собираем URI Hysteria2
+    local -a hy_uris=()
+    for f in "/root/hysteria-${dom}.txt" "/root/hysteria-${dom}-users.txt"; do
+        [ -f "$f" ] || continue
+        while IFS= read -r line; do
+            [[ "$line" =~ ^hy2:// ]] && hy_uris+=("$line")
+        done < "$f"
+    done
+    [ ${#hy_uris[@]} -eq 0 ] && { warn "URI Hysteria2 не найдены"; return 1; }
+
+    # Домен подписок из .env
+    local sub_domain=""
+    [ -f /opt/remnawave/.env ] && sub_domain=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d ' ')
+    if [ -z "$sub_domain" ]; then
+        read -rp "  Домен подписок Remnawave (sub.example.com): " sub_domain < /dev/tty
+    fi
+    info "Домен подписок: $sub_domain"
+
+    # Selfsteal домен
+    local selfsteal_dom=""
+    if [ -f /opt/remnawave/nginx.conf ]; then
+        selfsteal_dom=$(grep -B3 "root /var/www/html" /opt/remnawave/nginx.conf | grep "server_name" | awk '{print $2}' | tr -d ';' | head -1)
+    fi
+
+    local merge_name
+    read -rp "  Имя endpoint'а [hy-merge]: " merge_name < /dev/tty
+    merge_name="${merge_name:-hy-merge}"
+
+    # Записываем URI в файл для merger скрипта
+    local hy_uris_file="/etc/hy-merger-uris.txt"
+    printf '%s\n' "${hy_uris[@]}" > "$hy_uris_file"
+    ok "URI сохранены: $hy_uris_file (${#hy_uris[@]} шт.)"
+
+    # Создаём Python merger скрипт
+    local script_path="/usr/local/bin/hy_sub_merger.py"
+    cat > "$script_path" << 'PYEOF'
+#!/usr/bin/env python3
+import http.server, urllib.request, base64, ssl, os
+
+HY_URIS_FILE = "/etc/hy-merger-uris.txt"
+SUB_DOMAIN = os.environ.get("SUB_DOMAIN", "")
+PORT = int(os.environ.get("MERGER_PORT", "18080"))
+
+def get_hy_uris():
+    try:
+        with open(HY_URIS_FILE) as f:
+            return [l.strip() for l in f if l.strip().startswith("hy2://")]
+    except:
+        return []
+
+class MergerHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args): pass
+    def do_GET(self):
+        token = self.path.strip("/")
+        if not token:
+            self.send_response(404); self.end_headers(); return
+        rw_uris = []
+        try:
+            ctx = ssl.create_default_context()
+            url = f"https://{SUB_DOMAIN}/{token}"
+            req = urllib.request.Request(url, headers={"User-Agent": "clash"})
+            with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+                raw = resp.read()
+            try:
+                decoded = base64.b64decode(raw).decode("utf-8")
+            except:
+                decoded = raw.decode("utf-8")
+            rw_uris = [l for l in decoded.splitlines() if l.strip()]
+        except Exception as e:
+            pass
+        all_uris = rw_uris + get_hy_uris()
+        merged = base64.b64encode("\n".join(all_uris).encode()).decode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Profile-Update-Interval", "12")
+        self.end_headers()
+        self.wfile.write(merged.encode())
+
+if __name__ == "__main__":
+    server = http.server.HTTPServer(("127.0.0.1", PORT), MergerHandler)
+    print(f"Merger running on port {PORT}", flush=True)
+    server.serve_forever()
+PYEOF
+    chmod +x "$script_path"
+    ok "Merger скрипт: $script_path"
+
+    # Systemd сервис
+    cat > /etc/systemd/system/hy-merger.service << SVCEOF
+[Unit]
+Description=Hysteria2 Subscription Merger
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/hy_sub_merger.py
+Restart=always
+RestartSec=5
+Environment=MERGER_PORT=18080
+Environment=SUB_DOMAIN=${sub_domain}
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    systemctl daemon-reload
+    systemctl enable --now hy-merger
+    sleep 2
+    if systemctl is-active --quiet hy-merger; then
+        ok "Сервис hy-merger запущен"
+    else
+        warn "Сервис не запустился: journalctl -u hy-merger -n 20"
+        return 1
+    fi
+
+    # Добавляем location в nginx конфиг панели
+    if [ -f /opt/remnawave/nginx.conf ]; then
+        if grep -q "hy-merger" /opt/remnawave/nginx.conf; then
+            info "location уже есть в nginx.conf"
+        else
+            local loc_block="
+    # Hysteria2 merged subscription
+    location ~* ^/${merge_name}/(.+)\$ {
+        proxy_pass http://127.0.0.1:18080/\$1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }"
+            # Вставляем перед "root /var/www/html"
+            sed -i "s|    root /var/www/html; index index.html;|${loc_block}\n    root /var/www/html; index index.html;|" /opt/remnawave/nginx.conf
+            cd /opt/remnawave && docker compose restart remnawave-nginx >/dev/null 2>&1
+            ok "location добавлен в nginx, перезапущен"
+        fi
+    else
+        warn "nginx.conf не найден — добавьте location вручную"
+    fi
+
+    echo ""
+    echo -e "  ${GREEN}══════════════════════════════════════════${NC}"
+    echo -e "  ${GREEN}  Объединённая подписка готова!${NC}"
+    echo -e "  ${GREEN}══════════════════════════════════════════${NC}"
+    echo ""
+    if [ -n "$selfsteal_dom" ]; then
+        echo -e "  ${CYAN}Ссылка (вместо оригинальной Remnawave):${NC}"
+        echo -e "  ${WHITE}https://${selfsteal_dom}/${merge_name}/ТОКЕН${NC}"
+        echo ""
+        echo -e "  ${GRAY}Пример: https://${selfsteal_dom}/${merge_name}/uR5UffbwYXMA${NC}"
+    else
+        echo -e "  https://SELFSTEAL_DOMAIN/${merge_name}/ТОКЕН"
+    fi
+    echo ""
+    echo -e "  ${YELLOW}Обновить URI Hysteria (после добавления пользователей):${NC}"
+    echo -e "  ${CYAN}printf '%s\\n' \$(cat /root/hysteria-*.txt | grep hy2://) > /etc/hy-merger-uris.txt${NC}"
+    echo -e "  ${CYAN}systemctl restart hy-merger${NC}"
+}
+
+
 hysteria_menu() {
     header "Hysteria2"
     local inst_status
@@ -2619,8 +3248,11 @@ hysteria_menu() {
     echo -e "  ${BOLD}3)${RESET} Логи"
     echo -e "  ${BOLD}4)${RESET} Перезапустить"
     echo -e "  ${BOLD}5)${RESET} Добавить пользователя"
-    echo -e "  ${BOLD}6)${RESET} Пользователи и ссылки"
-    echo -e "  ${BOLD}7)${RESET} Перенести на другой сервер"
+    echo -e "  ${BOLD}6)${RESET} Удалить пользователя"
+    echo -e "  ${BOLD}7)${RESET} Пользователи и ссылки"
+    echo -e "  ${BOLD}8)${RESET} Опубликовать подписку"
+    echo -e "  ${BOLD}9)${RESET} Объединить с подпиской Remnawave"
+    echo -e " ${BOLD}10)${RESET} Перенести на другой сервер"
     echo -e "  ${BOLD}0)${RESET} Назад"
     echo ""
     local ch; read -rp "Выбор: " ch < /dev/tty
@@ -2630,8 +3262,11 @@ hysteria_menu() {
         3) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
         4) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
         5) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
-        6) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
-        7) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
+        6) hysteria_delete_user; read -rp "Enter..." < /dev/tty ;;
+        7) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
+        8) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
+        9) hysteria_setup_merger; read -rp "Enter..." < /dev/tty ;;
+        10) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
