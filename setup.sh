@@ -2284,8 +2284,41 @@ hysteria_add_user() {
     [ -f "$HYSTERIA_CONFIG" ] || { warn "Конфиг не найден. Сначала установите Hysteria2"; return 1; }
 
     local new_user new_pass
-    read -rp "  Имя пользователя: " new_user < /dev/tty
-    [ -z "$new_user" ] && { warn "Имя не может быть пустым"; return 1; }
+    # Показываем существующих пользователей
+    local existing
+    existing=$(awk '/^  userpass:/,/^[^ ]/' "$HYSTERIA_CONFIG" | grep -E "^    [^:]+:" | sed 's/:.*//' | tr -d ' ' | tr '\n' ' ')
+    [ -n "$existing" ] && info "Существующие пользователи: ${existing}"
+
+    # Ввод имени с проверкой на дубликат
+    while true; do
+        read -rp "  Имя пользователя: " new_user < /dev/tty
+        [ -z "$new_user" ] && { warn "Имя не может быть пустым"; continue; }
+        if grep -qE "^    ${new_user}:" "$HYSTERIA_CONFIG" 2>/dev/null; then
+            warn "Пользователь '${new_user}' уже существует."
+            echo ""
+            echo -e "  ${BOLD}1)${RESET} Ввести другое имя"
+            echo -e "  ${BOLD}2)${RESET} Заменить пароль для '${new_user}'"
+            echo -e "  ${BOLD}0)${RESET} Отмена"
+            local ch; read -rp "  Выбор: " ch < /dev/tty
+            case "$ch" in
+                1) continue ;;
+                2)
+                    read -rp "  Новый пароль (пусто = авто): " new_pass < /dev/tty
+                    if [ -z "$new_pass" ]; then
+                        new_pass=$(openssl rand -base64 18 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
+                        info "Сгенерирован пароль: $new_pass"
+                    fi
+                    sed -i "s/^    ${new_user}:.*$/    ${new_user}: \"${new_pass}\"/" "$HYSTERIA_CONFIG"
+                    systemctl reload "$HYSTERIA_SVC" 2>/dev/null || systemctl restart "$HYSTERIA_SVC"
+                    ok "Пароль для '${new_user}' обновлён"
+                    return 0 ;;
+                *) return 0 ;;
+            esac
+        else
+            break
+        fi
+    done
+
     read -rp "  Пароль (пусто = авто): " new_pass < /dev/tty
     if [ -z "$new_pass" ]; then
         new_pass=$(openssl rand -base64 18 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
@@ -2467,6 +2500,61 @@ REMOTE
     fi
 }
 
+# ── Показать ссылки пользователей ────────────────────────────────
+hysteria_show_links() {
+    header "Hysteria2 — Пользователи и ссылки"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Конфиг не найден"; return 1; }
+
+    local dom port
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
+    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+
+    local -a users=()
+    while IFS= read -r line; do
+        local u; u=$(echo "$line" | sed 's/:.*//' | tr -d ' ')
+        [ -n "$u" ] && users+=("$u")
+    done < <(awk '/^  userpass:/,/^[^ ]/' "$HYSTERIA_CONFIG" | grep -E "^    [^:]+:")
+
+    if [ ${#users[@]} -eq 0 ]; then
+        warn "Пользователи не найдены в конфиге"; return 1
+    fi
+
+    echo -e "  ${WHITE}Выберите пользователя:${NC}"
+    echo ""
+    local i=1
+    for u in "${users[@]}"; do
+        echo -e "  ${BOLD}${i})${RESET} ${u}"
+        i=$((i+1))
+    done
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    [[ "$ch" == "0" ]] && return
+    if ! [[ "$ch" =~ ^[0-9]+$ ]] || [ "$ch" -lt 1 ] || [ "$ch" -gt ${#users[@]} ]; then
+        warn "Неверный выбор"; return 1
+    fi
+
+    local selected="${users[$((ch-1))]}"
+    local pass
+    pass=$(grep -E "^    ${selected}:" "$HYSTERIA_CONFIG" | sed 's/.*: "//' | tr -d '"')
+
+    read -rp "  Название подключения [${selected}]: " conn_name < /dev/tty
+    conn_name="${conn_name:-$selected}"
+
+    local uri="hy2://${selected}:${pass}@${dom}:${port}?sni=${dom}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
+
+    echo ""
+    echo -e "  ${CYAN}Пользователь:${NC} ${selected}"
+    echo -e "  ${CYAN}Сервер:${NC}       ${dom}:${port}"
+    echo ""
+    echo -e "  ${CYAN}URI:${NC}"
+    echo "  $uri"
+    echo ""
+    echo "  QR-код:"
+    qrencode -t ANSIUTF8 "$uri" 2>/dev/null || warn "qrencode не установлен: apt install qrencode"
+}
+
 # ── Подменю Hysteria2 ─────────────────────────────────────────────
 hysteria_menu() {
     header "Hysteria2"
@@ -2485,7 +2573,8 @@ hysteria_menu() {
     echo -e "  ${BOLD}3)${RESET} Логи"
     echo -e "  ${BOLD}4)${RESET} Перезапустить"
     echo -e "  ${BOLD}5)${RESET} Добавить пользователя"
-    echo -e "  ${BOLD}6)${RESET} Перенести на другой сервер"
+    echo -e "  ${BOLD}6)${RESET} Пользователи и ссылки"
+    echo -e "  ${BOLD}7)${RESET} Перенести на другой сервер"
     echo -e "  ${BOLD}0)${RESET} Назад"
     echo ""
     local ch; read -rp "Выбор: " ch < /dev/tty
@@ -2495,7 +2584,8 @@ hysteria_menu() {
         3) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
         4) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
         5) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
-        6) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
+        6) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
+        7) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
