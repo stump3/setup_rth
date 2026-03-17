@@ -2525,7 +2525,7 @@ hysteria_add_user() {
     for f in "$users_file" "$main_file"; do
         [ -f "$f" ] || continue
         while IFS= read -r line; do
-            local n; n=$(echo "$line" | grep -oP '#\K.+$')
+            local n; n=$(echo "$line" | sed 's/.*#//')
             [ -n "$n" ] && existing_names+=("$n")
         done < "$f"
     done
@@ -2762,7 +2762,7 @@ hysteria_show_links() {
     for f in "/root/hysteria-${dom}-users.txt" "/root/hysteria-${dom}.txt"; do
         [ -f "$f" ] || continue
         local found_name
-        found_name=$(grep "hy2://${selected}:" "$f" 2>/dev/null | grep -oP '#\K.+$' | tail -1)
+        found_name=$(grep "hy2://${selected}:" "$f" 2>/dev/null | sed 's/.*#//' | tail -1)
         if [ -n "$found_name" ]; then
             conn_name="$found_name"
             break
@@ -2927,45 +2927,49 @@ SVCEOF
         return 1
     fi
 
-    # Добавляем location в nginx панели
+    # Добавляем location /merge/ в блок sub домена nginx
     if [ -f /opt/remnawave/nginx.conf ]; then
-        # Проверяем не добавлен ли уже
         if grep -q "hy-merger" /opt/remnawave/nginx.conf; then
             warn "Location для merger уже существует в nginx.conf"
         else
-            # Добавляем location /merge/ в блок selfsteal сервера
-            local insert_after="root /var/www/html; index index.html;"
-            local new_location="root /var/www/html; index index.html;
-    location /merge/ {
+            # Вставляем location /merge/ перед location @redirect в блоке sub домена
+            python3 << PYEOF
+import re
+with open('/opt/remnawave/nginx.conf') as f:
+    cfg = f.read()
+
+location_block = """    location /merge/ {
         proxy_pass http://127.0.0.1:${merger_port}/;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }"
-            sed -i "s|${insert_after}|${new_location}|" /opt/remnawave/nginx.conf
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+"""
+
+# Вставляем перед location @redirect в блоке sub домена
+cfg = cfg.replace('    location @redirect {', location_block + '    location @redirect {', 1)
+
+with open('/opt/remnawave/nginx.conf', 'w') as f:
+    f.write(cfg)
+print("OK")
+PYEOF
             cd /opt/remnawave && docker compose restart remnawave-nginx >/dev/null 2>&1
-            ok "Nginx обновлён"
+            ok "Nginx обновлён — location /merge/ добавлен в sub домен"
         fi
     else
-        warn "nginx.conf не найден в /opt/remnawave/. Добавьте location вручную."
+        warn "nginx.conf не найден. Добавьте location вручную в блок sub домена."
     fi
-
-    # Определяем selfsteal домен
-    local selfsteal_dom=""
-    selfsteal_dom=$(grep -B5 "root /var/www/html" /opt/remnawave/nginx.conf 2>/dev/null | grep "server_name" | awk '{print $2}' | tr -d ';' | head -1)
 
     echo ""
     ok "Готово! Объединённая подписка доступна по адресу:"
     echo ""
-    if [ -n "$selfsteal_dom" ]; then
-        echo -e "  ${CYAN}https://${selfsteal_dom}/merge/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
-    else
-        echo -e "  ${CYAN}https://SELFSTEAL_DOMAIN/merge/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
-    fi
+    echo -e "  ${CYAN}https://${sub_domain}/merge/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
     echo ""
     echo -e "  ${YELLOW}Замените ТОКЕН_ПОЛЬЗОВАТЕЛЯ на токен из панели Remnawave.${NC}"
-    echo -e "  ${YELLOW}Например: https://${selfsteal_dom:-SELFSTEAL_DOMAIN}/merge/uR5UffbwYXMA${NC}"
+    echo -e "  ${YELLOW}Например: https://${sub_domain}/merge/uR5UffbwYXMA${NC}"
     echo ""
-    echo -e "  Для обновления URI Hysteria2: пункт ${BOLD}7) Опубликовать подписку${RESET}"
+    echo -e "  Для обновления URI Hysteria2: пункт ${BOLD}8) Опубликовать подписку${RESET}"
 }
 
 # ── Публикация подписки через nginx ──────────────────────────────
