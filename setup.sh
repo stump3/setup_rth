@@ -1,0 +1,2593 @@
+#!/bin/bash
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  🛠️  SERVER SETUP — Unified Management Script                   ║
+# ║                                                                  ║
+# ║  Компоненты:                                                     ║
+# ║  • Remnawave Panel  — VPN-панель (eGames архитектура)            ║
+# ║  • MTProxy (telemt) — Telegram MTProto прокси (Rust)             ║
+# ║                                                                  ║
+# ║  Использование:                                                  ║
+# ║    bash setup.sh                                                 ║
+# ╚══════════════════════════════════════════════════════════════════╝
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# ═══════════════════════════════════════════════════════════════════
+# ЦВЕТА И ОБЩИЕ УТИЛИТЫ
+# ═══════════════════════════════════════════════════════════════════
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; WHITE='\033[1;37m'
+PURPLE='\033[0;35m'; GRAY='\033[0;90m'; BOLD='\033[1m'
+NC='\033[0m'; RESET="$NC"
+
+ok()      { echo -e "${GREEN}✅ $*${NC}"; }
+info()    { echo -e "${BLUE}ℹ  $*${NC}"; }
+warn()    { echo -e "${YELLOW}⚠  $*${NC}"; }
+err()     { echo -e "${RED}✗  $*${NC}"; exit 1; }
+success() { echo -e "${GREEN}[OK]${RESET}   $*"; }
+die()     { echo -e "${RED}[ERR]${RESET}  $*" >&2; exit 1; }
+
+step() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}  $*${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
+header() {
+    echo ""
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════${RESET}"
+    echo -e "${BOLD}${CYAN}  $*${RESET}"
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════${RESET}"
+    echo ""
+}
+
+confirm() {
+    while true; do
+        read -p "$1 (y/n): " -n 1 r < /dev/tty; echo
+        case "$r" in [yY]) return 0;; [nN]) return 1;; esac
+    done
+}
+
+ask() {
+    local var="$1" prompt="$2" default="${3:-}" val=""
+    while true; do
+        [ -n "$default" ] \
+            && read -p "  ${prompt} [${default}]: " val < /dev/tty \
+            || read -p "  ${prompt}: " val < /dev/tty
+        val="${val:-$default}"
+        [ -n "$val" ] && break
+        warn "Поле обязательно"
+    done
+    eval "$var=\"\$val\""
+    export "$var"
+}
+
+check_root()    { [ "$EUID" -ne 0 ] && err "Запустите от root: sudo bash $0"; }
+need_root()     { [ "$(id -u)" -eq 0 ] || die "Эта операция требует прав root."; }
+gen_secret()    { openssl rand -hex 16; }
+gen_hex64()     { openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64; }
+gen_password()  {
+    local p=""
+    p+=$(tr -dc 'A-Z'    </dev/urandom | head -c 1)
+    p+=$(tr -dc 'a-z'    </dev/urandom | head -c 1)
+    p+=$(tr -dc '0-9'    </dev/urandom | head -c 1)
+    p+=$(tr -dc '!@#%^&*' </dev/urandom | head -c 3)
+    p+=$(tr -dc 'A-Za-z0-9!@#%^&*' </dev/urandom | head -c 18)
+    echo "$p" | fold -w1 | shuf | tr -d '\n'
+}
+gen_user()      { tr -dc 'a-zA-Z' </dev/urandom | head -c 8; }
+
+get_public_ip() {
+    curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
+        || curl -s --max-time 5 https://ifconfig.me 2>/dev/null \
+        || echo "YOUR_SERVER_IP"
+}
+
+validate_domain() {
+    [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]
+}
+
+check_dns() {
+    local domain="$1" server_ip domain_ip
+    server_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "")
+    domain_ip=$(dig +short -t A "$domain" 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
+    [ -z "$server_ip" ] && { warn "Не удалось определить IP сервера"; return 1; }
+    [ -z "$domain_ip" ] && { warn "A-запись для $domain не найдена"; return 1; }
+    [ "$server_ip" != "$domain_ip" ] && { warn "$domain → $domain_ip, сервер → $server_ip"; return 1; }
+    ok "DNS $domain → $domain_ip ✓"
+    return 0
+}
+
+spinner() {
+    local pid=$1 text="${2:-Подождите...}" spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' delay=0.1
+    printf "${YELLOW}%s${NC}" "$text" > /dev/tty
+    while kill -0 "$pid" 2>/dev/null; do
+        for (( i=0; i<${#spinstr}; i++ )); do
+            printf "\r${YELLOW}[%s] %s${NC}" "${spinstr:$i:1}" "$text" > /dev/tty
+            sleep $delay
+        done
+    done
+    printf "\r\033[K" > /dev/tty
+}
+
+# Установка sshpass (нужна для migrate в обоих разделах)
+ensure_sshpass() {
+    command -v sshpass &>/dev/null && return 0
+    info "Установка sshpass..."
+    apt-get install -y -q sshpass 2>/dev/null || \
+        yum install -y sshpass 2>/dev/null || \
+        die "Не удалось установить sshpass. Установи вручную: apt install sshpass"
+    ok "sshpass установлен"
+}
+
+# API-запросы к Remnawave
+panel_api() {
+    local method="$1" url="$2" token="${3:-}" data="${4:-}"
+    local headers=(
+        -H "Content-Type: application/json"
+        -H "X-Forwarded-For: 127.0.0.1"
+        -H "X-Forwarded-Proto: https"
+        -H "X-Remnawave-Client-Type: browser"
+    )
+    [ -n "$token" ] && headers+=(-H "Authorization: Bearer $token")
+    if [ -n "$data" ]; then
+        curl -s -X "$method" "$url" "${headers[@]}" -d "$data"
+    else
+        curl -s -X "$method" "$url" "${headers[@]}"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# ███████████████████  PANEL SECTION  ██████████████████████████████
+# ═══════════════════════════════════════════════════════════════════
+
+PANEL_DIR="/opt/remnawave"
+PANEL_NGINX_DIR="/opt/nginx"           # используется только если nginx отдельно
+PANEL_MGMT_SCRIPT="/usr/local/bin/remnawave_panel"
+
+panel_get_base_domain() {
+    echo "$1" | awk -F'.' '{if (NF>2) print $(NF-1)"."$NF; else print $0}'
+}
+
+panel_is_wildcard_cert() {
+    local domain="$1" cert="/etc/letsencrypt/live/$1/fullchain.pem"
+    [ -f "$cert" ] && openssl x509 -noout -text -in "$cert" 2>/dev/null | grep -q "\*\.$domain"
+}
+
+panel_cert_exists() {
+    local domain="$1" base
+    [ -s "/etc/letsencrypt/live/$domain/fullchain.pem" ] && return 0
+    base=$(panel_get_base_domain "$domain")
+    [ "$base" != "$domain" ] && panel_is_wildcard_cert "$base" && return 0
+    return 1
+}
+
+panel_issue_cert() {
+    local domain="$1" base cert_method="$2"
+    base=$(panel_get_base_domain "$domain")
+
+    panel_cert_exists "$domain" && { ok "Сертификат для $domain уже есть"; return 0; }
+    info "Выпуск сертификата для $domain..."
+
+    case $cert_method in
+        1)
+            certbot certonly --dns-cloudflare \
+                --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini \
+                --dns-cloudflare-propagation-seconds 60 \
+                -d "$base" -d "*.$base" \
+                --email "${PANEL_CF_EMAIL:-admin@$base}" \
+                --agree-tos --non-interactive \
+                --key-type ecdsa --elliptic-curve secp384r1 >/dev/null 2>&1 \
+                && ok "Сертификат wildcard для $base выпущен" \
+                || { warn "Ошибка certbot для $base"; return 1; }
+            ;;
+        2)
+            ufw allow 80/tcp >/dev/null 2>&1
+            certbot certonly --standalone -d "$domain" \
+                --email "$PANEL_LE_EMAIL" \
+                --agree-tos --non-interactive \
+                --http-01-port 80 \
+                --key-type ecdsa --elliptic-curve secp384r1 >/dev/null 2>&1 \
+                && ok "Сертификат для $domain выпущен" \
+                || { warn "Ошибка certbot для $domain"; ufw delete allow 80/tcp >/dev/null 2>&1; return 1; }
+            ufw delete allow 80/tcp >/dev/null 2>&1
+            ;;
+        3)
+            certbot certonly --authenticator dns-gcore \
+                --dns-gcore-credentials ~/.secrets/certbot/gcore.ini \
+                --dns-gcore-propagation-seconds 80 \
+                -d "$base" -d "*.$base" \
+                --email "$PANEL_LE_EMAIL" \
+                --agree-tos --non-interactive \
+                --key-type ecdsa --elliptic-curve secp384r1 >/dev/null 2>&1 \
+                && ok "Сертификат wildcard для $base выпущен" \
+                || { warn "Ошибка certbot для $base"; return 1; }
+            ;;
+    esac
+}
+
+panel_get_cert_domain() {
+    local domain="$1" cert_method="$2"
+    [ "$cert_method" = "1" ] || [ "$cert_method" = "3" ] \
+        && panel_get_base_domain "$domain" \
+        || echo "$domain"
+}
+
+panel_install() {
+    step "Установка Remnawave Panel"
+    check_root
+
+    # ── Сбор данных ──────────────────────────────────────────────
+    echo -e "${WHITE}── Режим ────────────────────────────────────────────────────${NC}"
+    echo "  1) Панель + Нода (Reality selfsteal, всё на одном сервере)"
+    echo "  2) Только панель (нода на отдельном сервере)"
+    echo ""
+    local MODE=""
+    while [[ ! "$MODE" =~ ^[12]$ ]]; do
+        read -p "  Выбор (1/2): " MODE < /dev/tty
+    done
+
+    echo ""
+    echo -e "${WHITE}── Домены ───────────────────────────────────────────────────${NC}"
+    local PANEL_DOMAIN SUB_DOMAIN SELFSTEAL_DOMAIN
+    while true; do ask PANEL_DOMAIN "Домен панели (panel.example.com)"; validate_domain "$PANEL_DOMAIN" && break || warn "Неверный формат"; done
+    while true; do ask SUB_DOMAIN   "Домен подписок (sub.example.com)";  validate_domain "$SUB_DOMAIN"   && break || warn "Неверный формат"; done
+    while true; do ask SELFSTEAL_DOMAIN "Домен selfsteal (node.example.com)"; validate_domain "$SELFSTEAL_DOMAIN" && break || warn "Неверный формат"; done
+
+    [ "$PANEL_DOMAIN" = "$SUB_DOMAIN" ] || [ "$PANEL_DOMAIN" = "$SELFSTEAL_DOMAIN" ] || \
+    [ "$SUB_DOMAIN" = "$SELFSTEAL_DOMAIN" ] && err "Все три домена должны быть уникальными"
+
+    echo ""
+    echo -e "${WHITE}── SSL сертификаты ──────────────────────────────────────────${NC}"
+    echo "  1) Cloudflare DNS-01 (wildcard, рекомендуется)"
+    echo "  2) ACME HTTP-01 (Let's Encrypt)"
+    echo "  3) Gcore DNS-01 (wildcard)"
+    local CERT_METHOD=""
+    while [[ ! "$CERT_METHOD" =~ ^[123]$ ]]; do
+        read -p "  Метод (1/2/3): " CERT_METHOD < /dev/tty
+    done
+
+    local PANEL_CF_EMAIL="" PANEL_CF_KEY="" PANEL_LE_EMAIL="" GCORE_TOKEN=""
+    case $CERT_METHOD in
+        1) ask PANEL_CF_KEY   "  Cloudflare API Token"
+           ask PANEL_CF_EMAIL "  Email Cloudflare" ;;
+        2) ask PANEL_LE_EMAIL "  Email для Let's Encrypt" ;;
+        3) ask GCORE_TOKEN    "  Gcore API Token"
+           ask PANEL_LE_EMAIL "  Email для Let's Encrypt" ;;
+    esac
+
+    echo ""
+    info "Проверка DNS..."
+    check_dns "$PANEL_DOMAIN"     || warn "Проверьте DNS для $PANEL_DOMAIN"
+    check_dns "$SUB_DOMAIN"       || warn "Проверьте DNS для $SUB_DOMAIN"
+    check_dns "$SELFSTEAL_DOMAIN" || warn "Проверьте DNS для $SELFSTEAL_DOMAIN"
+
+    # ── Зависимости ──────────────────────────────────────────────
+    step "Зависимости"
+    [ ! -f /swapfile ] && {
+        fallocate -l 2G /swapfile && chmod 600 /swapfile
+        mkswap /swapfile && swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        ok "Swap 2G"
+    }
+    grep -q "net.ipv4.tcp_congestion_control = bbr" /etc/sysctl.conf || {
+        echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+    }
+    apt-get update -y -q
+    PKGS=(curl wget git nano htop socat jq openssl ca-certificates gnupg \
+          lsb-release dnsutils unzip cron certbot python3-certbot-dns-cloudflare)
+    [ "$CERT_METHOD" = "3" ] && PKGS+=(python3-pip)
+    MISSING=(); for p in "${PKGS[@]}"; do dpkg -l "$p" &>/dev/null || MISSING+=("$p"); done
+    [ ${#MISSING[@]} -gt 0 ] && apt-get install -y -q "${MISSING[@]}"
+    [ "$CERT_METHOD" = "3" ] && {
+        certbot plugins 2>/dev/null | grep -q "dns-gcore" || \
+            python3 -m pip install --break-system-packages certbot-dns-gcore >/dev/null 2>&1 || true
+    }
+    systemctl is-active --quiet cron || systemctl start cron
+    systemctl is-enabled --quiet cron || systemctl enable cron
+    ok "Системные пакеты"
+    ! command -v docker &>/dev/null && {
+        curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
+        systemctl enable docker >/dev/null 2>&1
+        ok "Docker установлен"
+    } || ok "Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')"
+    ufw allow 22/tcp  comment 'SSH'   >/dev/null 2>&1
+    ufw allow 443/tcp comment 'HTTPS' >/dev/null 2>&1
+    ufw --force enable >/dev/null 2>&1
+    ok "UFW настроен"
+
+    # ── SSL ──────────────────────────────────────────────────────
+    step "SSL сертификаты"
+    case $CERT_METHOD in
+        1)
+            mkdir -p ~/.secrets/certbot
+            if echo "$PANEL_CF_KEY" | grep -qE '[A-Z]'; then
+                cat > ~/.secrets/certbot/cloudflare.ini <<EOF
+dns_cloudflare_api_token = $PANEL_CF_KEY
+EOF
+            else
+                cat > ~/.secrets/certbot/cloudflare.ini <<EOF
+dns_cloudflare_email = $PANEL_CF_EMAIL
+dns_cloudflare_api_key = $PANEL_CF_KEY
+EOF
+            fi
+            chmod 600 ~/.secrets/certbot/cloudflare.ini ;;
+        3)
+            mkdir -p ~/.secrets/certbot
+            cat > ~/.secrets/certbot/gcore.ini <<EOF
+dns_gcore_apitoken = $GCORE_TOKEN
+EOF
+            chmod 600 ~/.secrets/certbot/gcore.ini ;;
+    esac
+
+    declare -A PANEL_CERT_MAP
+    local domains_arr=("$PANEL_DOMAIN" "$SUB_DOMAIN" "$SELFSTEAL_DOMAIN")
+    if [ "$CERT_METHOD" = "1" ] || [ "$CERT_METHOD" = "3" ]; then
+        declare -A UNIQUE_BASES
+        for d in "${domains_arr[@]}"; do
+            b=$(panel_get_base_domain "$d"); UNIQUE_BASES["$b"]=1
+        done
+        for base in "${!UNIQUE_BASES[@]}"; do panel_issue_cert "$base" "$CERT_METHOD"; done
+    else
+        for d in "${domains_arr[@]}"; do panel_issue_cert "$d" "$CERT_METHOD"; done
+    fi
+
+    local PC SC STC
+    PC=$(panel_get_cert_domain "$PANEL_DOMAIN"     "$CERT_METHOD")
+    SC=$(panel_get_cert_domain "$SUB_DOMAIN"       "$CERT_METHOD")
+    STC=$(panel_get_cert_domain "$SELFSTEAL_DOMAIN" "$CERT_METHOD")
+
+    # Cron автообновление
+    local CRON_CMD
+    [ "$CERT_METHOD" = "2" ] \
+        && CRON_CMD="ufw allow 80 && /usr/bin/certbot renew --quiet && ufw delete allow 80 && ufw reload" \
+        || CRON_CMD="/usr/bin/certbot renew --quiet"
+    crontab -u root -l 2>/dev/null | grep -q "certbot renew" || \
+        (crontab -u root -l 2>/dev/null; echo "0 5 * * 0 $CRON_CMD") | crontab -u root -
+
+    for cd in "$PC" "$SC" "$STC"; do
+        local renewal="/etc/letsencrypt/renewal/$cd.conf"
+        [ -f "$renewal" ] || continue
+        local hook="renew_hook = sh -c 'cd /opt/remnawave && docker compose down remnawave-nginx && docker compose up -d remnawave-nginx'"
+        grep -q "renew_hook" "$renewal" \
+            && sed -i "/renew_hook/c\\$hook" "$renewal" \
+            || echo "$hook" >> "$renewal"
+    done
+    ok "Сертификаты и автообновление настроены"
+
+    # ── Генерация конфигурации ───────────────────────────────────
+    step "Генерация конфигурации"
+    mkdir -p /opt/remnawave && cd /opt/remnawave
+
+    local SUPERADMIN_USER SUPERADMIN_PASS COOKIE_KEY COOKIE_VAL
+    local JWT_AUTH JWT_API METRICS_USER METRICS_PASS
+    SUPERADMIN_USER=$(gen_user)
+    SUPERADMIN_PASS=$(gen_password)
+    COOKIE_KEY=$(gen_user)
+    COOKIE_VAL=$(gen_user)
+    JWT_AUTH=$(gen_hex64)
+    JWT_API=$(gen_hex64)
+    METRICS_USER=$(gen_user)
+    METRICS_PASS=$(gen_user)
+
+    cat > /opt/remnawave/.env << EOF
+APP_PORT=3000
+METRICS_PORT=3001
+API_INSTANCES=1
+DATABASE_URL="postgresql://postgres:postgres@remnawave-db:5432/postgres"
+REDIS_HOST=remnawave-redis
+REDIS_PORT=6379
+JWT_AUTH_SECRET=$JWT_AUTH
+JWT_API_TOKENS_SECRET=$JWT_API
+JWT_AUTH_LIFETIME=168
+FRONT_END_DOMAIN=$PANEL_DOMAIN
+SUB_PUBLIC_DOMAIN=$SUB_DOMAIN
+SWAGGER_PATH=/docs
+SCALAR_PATH=/scalar
+IS_DOCS_ENABLED=false
+METRICS_USER=$METRICS_USER
+METRICS_PASS=$METRICS_PASS
+WEBHOOK_ENABLED=false
+WEBHOOK_URL=https://your-webhook-url.com/endpoint
+WEBHOOK_SECRET_HEADER=$(gen_hex64)
+IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
+TELEGRAM_BOT_TOKEN=change_me
+TELEGRAM_NOTIFY_USERS_CHAT_ID=change_me
+TELEGRAM_NOTIFY_NODES_CHAT_ID=change_me
+TELEGRAM_NOTIFY_CRM_CHAT_ID=change_me
+BANDWIDTH_USAGE_NOTIFICATIONS_ENABLED=false
+BANDWIDTH_USAGE_NOTIFICATIONS_THRESHOLD=[60, 80]
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=postgres
+EOF
+
+    # Монтирование сертификатов — уникальные домены
+    local CERT_VOLUMES=""
+    declare -A MOUNTED_CERTS
+    for cd in "$PC" "$SC" "$STC"; do
+        [ -n "${MOUNTED_CERTS[$cd]:-}" ] && continue
+        CERT_VOLUMES+="      - /etc/letsencrypt/live/${cd}/fullchain.pem:/etc/nginx/ssl/${cd}/fullchain.pem:ro
+      - /etc/letsencrypt/live/${cd}/privkey.pem:/etc/nginx/ssl/${cd}/privkey.pem:ro
+"
+        MOUNTED_CERTS["$cd"]=1
+    done
+
+    # docker-compose
+    if [ "$MODE" = "1" ]; then
+        cat > /opt/remnawave/docker-compose.yml << EOFYML
+services:
+  remnawave-db:
+    image: postgres:18.1
+    container_name: remnawave-db
+    hostname: remnawave-db
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    env_file: .env
+    environment:
+      - POSTGRES_USER=\${POSTGRES_USER}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB}
+      - TZ=UTC
+    ports: ['127.0.0.1:6767:5432']
+    volumes: [remnawave-db-data:/var/lib/postgresql]
+    networks: [remnawave-network]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}']
+      interval: 3s; timeout: 10s; retries: 3
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave:
+    image: remnawave/backend:2
+    container_name: remnawave
+    hostname: remnawave
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    env_file: .env
+    ports:
+      - '127.0.0.1:3000:\${APP_PORT:-3000}'
+      - '127.0.0.1:3001:\${METRICS_PORT:-3001}'
+    networks: [remnawave-network]
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:\${METRICS_PORT:-3001}/health']
+      interval: 30s; timeout: 5s; retries: 3; start_period: 30s
+    depends_on:
+      remnawave-db: {condition: service_healthy}
+      remnawave-redis: {condition: service_healthy}
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave-redis:
+    image: valkey/valkey:9.0.0-alpine
+    container_name: remnawave-redis
+    hostname: remnawave-redis
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    networks: [remnawave-network]
+    command: >
+      valkey-server --save "" --appendonly no
+      --maxmemory-policy noeviction --loglevel warning
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 3s; timeout: 10s; retries: 3
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave-nginx:
+    image: nginx:1.28
+    container_name: remnawave-nginx
+    hostname: remnawave-nginx
+    network_mode: host
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /dev/shm:/dev/shm:rw
+      - /var/www/html:/var/www/html:ro
+${CERT_VOLUMES}    command: sh -c 'rm -f /dev/shm/nginx.sock && exec nginx -g "daemon off;"'
+    depends_on: [remnawave, remnawave-subscription-page]
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave-subscription-page:
+    image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription-page
+    hostname: remnawave-subscription-page
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    depends_on:
+      remnawave: {condition: service_healthy}
+    environment:
+      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      - APP_PORT=3010
+      - REMNAWAVE_API_TOKEN=PLACEHOLDER
+    ports: ['127.0.0.1:3010:3010']
+    networks: [remnawave-network]
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnanode:
+    image: remnawave/node:latest
+    container_name: remnanode
+    hostname: remnanode
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    network_mode: host
+    environment:
+      - NODE_PORT=2222
+      - SECRET_KEY="PUBLIC KEY FROM REMNAWAVE-PANEL"
+    volumes: [/dev/shm:/dev/shm:rw]
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
+    ipam:
+      config: [{subnet: 172.30.0.0/16}]
+    external: false
+
+volumes:
+  remnawave-db-data:
+    driver: local
+    name: remnawave-db-data
+EOFYML
+    else
+        cat > /opt/remnawave/docker-compose.yml << EOFYML
+services:
+  remnawave-db:
+    image: postgres:18.1
+    container_name: remnawave-db
+    hostname: remnawave-db
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    env_file: .env
+    environment:
+      - POSTGRES_USER=\${POSTGRES_USER}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB}
+      - TZ=UTC
+    ports: ['127.0.0.1:6767:5432']
+    volumes: [remnawave-db-data:/var/lib/postgresql]
+    networks: [remnawave-network]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}']
+      interval: 3s; timeout: 10s; retries: 3
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave:
+    image: remnawave/backend:2
+    container_name: remnawave
+    hostname: remnawave
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    env_file: .env
+    ports:
+      - '127.0.0.1:3000:\${APP_PORT:-3000}'
+      - '127.0.0.1:3001:\${METRICS_PORT:-3001}'
+    networks: [remnawave-network]
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:\${METRICS_PORT:-3001}/health']
+      interval: 30s; timeout: 5s; retries: 3; start_period: 30s
+    depends_on:
+      remnawave-db: {condition: service_healthy}
+      remnawave-redis: {condition: service_healthy}
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave-redis:
+    image: valkey/valkey:9.0.0-alpine
+    container_name: remnawave-redis
+    hostname: remnawave-redis
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    networks: [remnawave-network]
+    command: >
+      valkey-server --save "" --appendonly no
+      --maxmemory-policy noeviction --loglevel warning
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 3s; timeout: 10s; retries: 3
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave-nginx:
+    image: nginx:1.28
+    container_name: remnawave-nginx
+    hostname: remnawave-nginx
+    network_mode: host
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+${CERT_VOLUMES}    depends_on: [remnawave, remnawave-subscription-page]
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+  remnawave-subscription-page:
+    image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription-page
+    hostname: remnawave-subscription-page
+    restart: always
+    ulimits: {nofile: {soft: 1048576, hard: 1048576}}
+    depends_on:
+      remnawave: {condition: service_healthy}
+    environment:
+      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      - APP_PORT=3010
+      - REMNAWAVE_API_TOKEN=PLACEHOLDER
+    ports: ['127.0.0.1:3010:3010']
+    networks: [remnawave-network]
+    logging: {driver: json-file, options: {max-size: 30m, max-file: '5'}}
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
+    external: false
+
+volumes:
+  remnawave-db-data:
+    driver: local
+    name: remnawave-db-data
+EOFYML
+    fi
+
+    # nginx.conf
+    local LISTEN_DIR REAL_IP_P REAL_IP_S
+    if [ "$MODE" = "1" ]; then
+        LISTEN_DIR="listen unix:/dev/shm/nginx.sock ssl proxy_protocol;"
+        REAL_IP_P="\$proxy_protocol_addr"
+        REAL_IP_S="\$proxy_protocol_addr"
+    else
+        LISTEN_DIR="listen 443 ssl;"
+        REAL_IP_P="\$remote_addr"
+        REAL_IP_S="\$remote_addr"
+    fi
+
+    cat > /opt/remnawave/nginx.conf << NGINX_CONF_EOF
+server_names_hash_bucket_size 64;
+
+upstream remnawave { server 127.0.0.1:3000; }
+upstream remnawave-sub { server 127.0.0.1:3010; }
+
+map \$http_upgrade \$connection_upgrade {
+    default upgrade; "" close;
+}
+
+# Cookie-защита панели: доступ только с ?${COOKIE_KEY}=${COOKIE_VAL}
+map \$http_cookie \$auth_cookie {
+    default 0; "~*${COOKIE_KEY}=${COOKIE_VAL}" 1;
+}
+map \$arg_${COOKIE_KEY} \$auth_query {
+    default 0; "${COOKIE_VAL}" 1;
+}
+map "\$auth_cookie\$auth_query" \$authorized {
+    "~1" 1; default 0;
+}
+map \$arg_${COOKIE_KEY} \$set_cookie_header {
+    "${COOKIE_VAL}" "${COOKIE_KEY}=${COOKIE_VAL}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000";
+    default "";
+}
+
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ecdh_curve X25519:prime256v1:secp384r1;
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+ssl_prefer_server_ciphers on;
+ssl_session_timeout 1d;
+ssl_session_cache shared:MozSSL:10m;
+ssl_session_tickets off;
+
+server {
+    server_name ${PANEL_DOMAIN};
+    ${LISTEN_DIR}
+    http2 on;
+    ssl_certificate "/etc/nginx/ssl/${PC}/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/${PC}/privkey.pem";
+    ssl_trusted_certificate "/etc/nginx/ssl/${PC}/fullchain.pem";
+    add_header Set-Cookie \$set_cookie_header;
+
+    location / {
+        error_page 418 = @unauthorized;
+        recursive_error_pages on;
+        if (\$authorized = 0) { return 418; }
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header X-Real-IP ${REAL_IP_P};
+        proxy_set_header X-Forwarded-For ${REAL_IP_P};
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+        proxy_send_timeout 60s; proxy_read_timeout 60s;
+    }
+    location @unauthorized {
+        root /var/www/html; index index.html; try_files /index.html =444;
+    }
+}
+
+server {
+    server_name ${SUB_DOMAIN};
+    ${LISTEN_DIR}
+    http2 on;
+    ssl_certificate "/etc/nginx/ssl/${SC}/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/${SC}/privkey.pem";
+    ssl_trusted_certificate "/etc/nginx/ssl/${SC}/fullchain.pem";
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave-sub;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header X-Real-IP ${REAL_IP_S};
+        proxy_set_header X-Forwarded-For ${REAL_IP_S};
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+        proxy_send_timeout 60s; proxy_read_timeout 60s;
+        proxy_intercept_errors on;
+        error_page 400 404 500 502 @sub_error;
+    }
+    location @sub_error { return 444; }
+}
+
+server {
+    server_name ${SELFSTEAL_DOMAIN};
+    ${LISTEN_DIR}
+    http2 on;
+    ssl_certificate "/etc/nginx/ssl/${STC}/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/${STC}/privkey.pem";
+    ssl_trusted_certificate "/etc/nginx/ssl/${STC}/fullchain.pem";
+    root /var/www/html; index index.html;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
+}
+
+server {
+    ${LISTEN_DIR}
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    return 444;
+}
+NGINX_CONF_EOF
+
+    ok "Конфигурация сгенерирована"
+
+    # Маскировочный сайт
+    mkdir -p /var/www/html
+    if curl -s --max-time 10 -L \
+            "https://github.com/eGamesAPI/simple-web-templates/archive/refs/heads/main.zip" \
+            -o /tmp/tmpl.zip 2>/dev/null && \
+       unzip -q /tmp/tmpl.zip -d /tmp/tmpl 2>/dev/null; then
+        TDIRS=(/tmp/tmpl/simple-web-templates-main/*/)
+        [ ${#TDIRS[@]} -gt 0 ] && cp -a "${TDIRS[$RANDOM % ${#TDIRS[@]}]}/." /var/www/html/ 2>/dev/null || true
+        rm -rf /tmp/tmpl /tmp/tmpl.zip
+        ok "Маскировочный сайт установлен"
+    else
+        cat > /var/www/html/index.html <<'HTMLEOF'
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Welcome</title>
+<style>body{font-family:sans-serif;text-align:center;padding:100px;background:#f5f5f5}h1{color:#333}</style>
+</head><body><h1>Welcome</h1><p>Service is running.</p></body></html>
+HTMLEOF
+        ok "Базовая страница /var/www/html"
+    fi
+
+    # ── Пауза — просмотр конфигурации ───────────────────────────
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}  📝 Конфигурационные файлы сгенерированы${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${WHITE}  Перед запуском можно открыть новый SSH-сеанс и проверить${NC}"
+    echo -e "${WHITE}  или изменить любой из файлов через nano:${NC}"
+    echo ""
+    echo -e "  ${CYAN}nano /opt/remnawave/.env${NC}             ${GRAY}# секреты, JWT, домены${NC}"
+    echo -e "  ${CYAN}nano /opt/remnawave/docker-compose.yml${NC}  ${GRAY}# образы, порты${NC}"
+    echo -e "  ${CYAN}nano /opt/remnawave/nginx.conf${NC}       ${GRAY}# SSL, cookie-защита${NC}"
+    echo ""
+    echo -e "  ${GRAY}Ctrl+O → Enter — сохранить | Ctrl+X — выйти из nano${NC}"
+    echo ""
+    read -p "  Нажмите Enter когда готовы к запуску..." < /dev/tty
+    ok "Продолжаем установку"
+
+    # ── Запуск и автоконфигурация ────────────────────────────────
+    step "Запуск и автоконфигурация"
+    cd /opt/remnawave
+    [ "$MODE" = "1" ] && ufw allow from 172.30.0.0/16 to any port 2222 proto tcp >/dev/null 2>&1
+
+    docker compose up -d >/dev/null 2>&1 & spinner $! "Запуск контейнеров..."
+    ok "Контейнеры запущены"
+
+    info "Ожидание готовности панели (до 2 минут)..."
+    sleep 20
+    local ATTEMPTS=0
+    until curl -s -f --max-time 30 "http://127.0.0.1:3000/api/auth/status" \
+            -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Forwarded-Proto: https' >/dev/null 2>&1; do
+        ATTEMPTS=$((ATTEMPTS+1))
+        [ "$ATTEMPTS" -ge 5 ] && err "Панель не стартовала. Проверьте: cd /opt/remnawave && docker compose logs remnawave"
+        info "Попытка $ATTEMPTS/5, ждём 60с..."; sleep 60
+    done
+    ok "Панель готова"
+
+    local API="127.0.0.1:3000"
+    local REG
+    REG=$(panel_api "POST" "http://$API/api/auth/register" "" \
+        "{\"username\":\"$SUPERADMIN_USER\",\"password\":\"$SUPERADMIN_PASS\"}")
+    local TOKEN
+    TOKEN=$(echo "$REG" | jq -r '.response.accessToken // empty' 2>/dev/null)
+    [ -z "$TOKEN" ] && err "Ошибка регистрации: $REG"
+    ok "Суперадмин: $SUPERADMIN_USER"
+
+    local KEYS_R PRIV_KEY
+    KEYS_R=$(panel_api "GET" "http://$API/api/system/tools/x25519/generate" "$TOKEN")
+    PRIV_KEY=$(echo "$KEYS_R" | jq -r '.response.keypairs[0].privateKey // empty' 2>/dev/null)
+    [ -z "$PRIV_KEY" ] && err "Ошибка генерации ключей"
+
+    local PUB_R PUB_KEY
+    PUB_R=$(panel_api "GET" "http://$API/api/keygen" "$TOKEN")
+    PUB_KEY=$(echo "$PUB_R" | jq -r '.response.pubKey // empty' 2>/dev/null)
+    [ -z "$PUB_KEY" ] && err "Ошибка получения публичного ключа"
+    sed -i "s|SECRET_KEY=\"PUBLIC KEY FROM REMNAWAVE-PANEL\"|SECRET_KEY=\"$PUB_KEY\"|g" \
+        /opt/remnawave/docker-compose.yml
+    ok "Ключи Reality готовы"
+
+    local OLD_P
+    OLD_P=$(panel_api "GET" "http://$API/api/config-profiles" "$TOKEN" | \
+        jq -r '.response.configProfiles[] | select(.name=="Default-Profile") | .uuid' 2>/dev/null || echo "")
+    [ -n "$OLD_P" ] && panel_api "DELETE" "http://$API/api/config-profiles/$OLD_P" "$TOKEN" >/dev/null
+
+    local SHORT_ID DEST_VAL
+    SHORT_ID=$(openssl rand -hex 8)
+    [ "$MODE" = "1" ] && DEST_VAL='/dev/shm/nginx.sock' || DEST_VAL="${SELFSTEAL_DOMAIN}:443"
+
+    local PROFILE_R
+    PROFILE_R=$(panel_api "POST" "http://$API/api/config-profiles" "$TOKEN" "$(jq -n \
+        --arg name "StealConfig" --arg domain "$SELFSTEAL_DOMAIN" \
+        --arg pk "$PRIV_KEY"     --arg sid "$SHORT_ID" --arg dest "$DEST_VAL" \
+        '{name:$name,config:{log:{loglevel:"warning"},dns:{queryStrategy:"UseIPv4",servers:[{address:"https://dns.google/dns-query",skipFallback:false}]},inbounds:[{tag:"Steal",port:443,protocol:"vless",settings:{clients:[],decryption:"none"},sniffing:{enabled:true,destOverride:["http","tls","quic"]},streamSettings:{network:"tcp",security:"reality",realitySettings:{show:false,xver:1,dest:$dest,spiderX:"",shortIds:[$sid],privateKey:$pk,serverNames:[$domain]}}}],outbounds:[{tag:"DIRECT",protocol:"freedom"},{tag:"BLOCK",protocol:"blackhole"}],routing:{rules:[{ip:["geoip:private"],type:"field",outboundTag:"BLOCK"},{type:"field",protocol:["bittorrent"],outboundTag:"BLOCK"}]}}}' 2>/dev/null)")
+
+    local CFG_UUID IBD_UUID
+    CFG_UUID=$(echo "$PROFILE_R" | jq -r '.response.uuid // empty' 2>/dev/null)
+    IBD_UUID=$(echo "$PROFILE_R" | jq -r '.response.inbounds[0].uuid // empty' 2>/dev/null)
+    [ -z "$CFG_UUID" ] && err "Ошибка создания конфиг-профиля"
+    ok "Конфиг-профиль создан"
+
+    local NODE_ADDR
+    [ "$MODE" = "2" ] && NODE_ADDR="$SELFSTEAL_DOMAIN" || NODE_ADDR="172.30.0.1"
+    panel_api "POST" "http://$API/api/nodes" "$TOKEN" "$(jq -n \
+        --arg na "$NODE_ADDR" --arg cu "$CFG_UUID" --arg iu "$IBD_UUID" \
+        '{name:"Steal",address:$na,port:2222,configProfile:{activeConfigProfileUuid:$cu,activeInbounds:[$iu]},isTrafficTrackingActive:false,trafficLimitBytes:0,notifyPercent:0,trafficResetDay:31,excludedInbounds:[],countryCode:"XX",consumptionMultiplier:1.0}' 2>/dev/null)" >/dev/null 2>&1 \
+        && ok "Нода создана" || warn "Ошибка создания ноды"
+
+    panel_api "POST" "http://$API/api/hosts" "$TOKEN" "$(jq -n \
+        --arg cu "$CFG_UUID" --arg iu "$IBD_UUID" --arg addr "$SELFSTEAL_DOMAIN" \
+        '{inbound:{configProfileUuid:$cu,configProfileInboundUuid:$iu},remark:"Steal",address:$addr,port:443,path:"",sni:$addr,host:"",alpn:null,fingerprint:"chrome",allowInsecure:false,isDisabled:false,securityLayer:"DEFAULT"}' 2>/dev/null)" >/dev/null 2>&1 \
+        && ok "Хост создан" || warn "Ошибка создания хоста"
+
+    local SQUAD_UUIDS
+    SQUAD_UUIDS=$(panel_api "GET" "http://$API/api/internal-squads" "$TOKEN" | \
+        jq -r '.response.internalSquads[].uuid' 2>/dev/null || echo "")
+    for su in $SQUAD_UUIDS; do
+        [[ "$su" =~ ^[0-9a-f-]{36}$ ]] || continue
+        panel_api "PATCH" "http://$API/api/internal-squads" "$TOKEN" \
+            "{\"uuid\":\"$su\",\"inbounds\":[\"$IBD_UUID\"]}" >/dev/null 2>&1 || true
+    done
+    ok "Squad обновлён"
+
+    local SUB_TOKEN_R SUB_TOKEN
+    SUB_TOKEN_R=$(panel_api "POST" "http://$API/api/tokens" "$TOKEN" '{"tokenName":"subscription-page"}')
+    SUB_TOKEN=$(echo "$SUB_TOKEN_R" | jq -r '.response.token // empty' 2>/dev/null)
+    [ -n "$SUB_TOKEN" ] && {
+        sed -i "s|REMNAWAVE_API_TOKEN=PLACEHOLDER|REMNAWAVE_API_TOKEN=$SUB_TOKEN|g" \
+            /opt/remnawave/docker-compose.yml
+        ok "API-токен для Subscription Page"
+    } || warn "Не удалось создать API-токен автоматически"
+
+    docker compose down remnawave-subscription-page >/dev/null 2>&1 & spinner $! "Перезапуск Sub..."
+    docker compose up -d remnawave-subscription-page >/dev/null 2>&1 & spinner $! "Запуск Sub..."
+    docker compose down >/dev/null 2>&1 & spinner $! "Финальный рестарт..."
+    docker compose up -d >/dev/null 2>&1 & spinner $! "Запуск..."
+    ok "Стек перезапущен"
+
+    # ── Команда управления ───────────────────────────────────────
+    panel_install_mgmt_script "$PANEL_DOMAIN" "$COOKIE_KEY" "$COOKIE_VAL" "$MODE"
+
+    # ── Итог ─────────────────────────────────────────────────────
+    echo ""
+    echo -e "${GREEN}"
+    echo "  ╔══════════════════════════════════════════════════════════╗"
+    echo "  ║   🎉 REMNAWAVE PANEL УСТАНОВЛЕНА!                        ║"
+    echo "  ╚══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "  URL:       ${WHITE}https://${PANEL_DOMAIN}/auth/login?${COOKIE_KEY}=${COOKIE_VAL}${NC}"
+    echo -e "  Логин:     ${WHITE}${SUPERADMIN_USER}${NC}"
+    echo -e "  Пароль:    ${WHITE}${SUPERADMIN_PASS}${NC}"
+    echo ""
+    echo -e "  Подписки:  ${CYAN}https://${SUB_DOMAIN}${NC}"
+    echo -e "  Selfsteal: ${CYAN}https://${SELFSTEAL_DOMAIN}${NC}"
+    echo ""
+    echo -e "  Управление: ${CYAN}remnawave_panel${NC}  или  ${CYAN}rp${NC}"
+    echo ""
+    echo -e "${RED}  ⚠️  Сохраните URL с ключом — без него войти нельзя!${NC}"
+    echo -e "${RED}     https://${PANEL_DOMAIN}/auth/login?${COOKIE_KEY}=${COOKIE_VAL}${NC}"
+    echo ""
+}
+
+panel_install_mgmt_script() {
+    local panel_domain="$1" cookie_key="$2" cookie_val="$3" mode="$4"
+    local mgmt="/usr/local/bin/remnawave_panel"
+    cat > "$mgmt" << 'MGMTEOF'
+#!/bin/bash
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; WHITE='\033[1;37m'; PURPLE='\033[0;35m'; NC='\033[0m'
+DIR="/opt/remnawave"
+ok()   { echo -e "${GREEN}✅ $*${NC}"; }
+info() { echo -e "${CYAN}ℹ  $*${NC}"; }
+warn() { echo -e "${YELLOW}⚠  $*${NC}"; }
+spinner() {
+    local pid=$1 text="${2:-Подождите...}" spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' delay=0.1
+    while kill -0 "$pid" 2>/dev/null; do
+        for((i=0;i<${#spinstr};i++)); do
+            printf "\r${YELLOW}[%s] %s${NC}" "${spinstr:$i:1}" "$text">/dev/tty; sleep $delay
+        done
+    done; printf "\r\033[K">/dev/tty
+}
+do_status() {
+    echo -e "${WHITE}📊 Статус:${NC}"
+    for c in remnawave remnawave-db remnawave-redis remnawave-nginx remnawave-subscription-page remnanode; do
+        s=$(docker ps --format '{{.Status}}' -f "name=$c" 2>/dev/null | head -1)
+        [ -n "$s" ] && echo "$s" | grep -qE "^Up|healthy" \
+            && echo -e "  ${GREEN}●${NC} $c — $s" || echo -e "  ${YELLOW}◐${NC} $c — $s" \
+            || echo -e "  ${RED}○${NC} $c"
+    done
+    echo ""
+    docker stats --no-stream --format "  {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null | \
+        grep -E "remnawave|remnanode" | sort
+}
+do_logs() {
+    local s="${1:-panel}"; cd "$DIR"
+    case $s in
+        nginx) docker logs remnawave-nginx --tail=50 -f ;;
+        sub)   docker logs remnawave-subscription-page --tail=50 -f ;;
+        node)  docker logs remnanode --tail=50 -f ;;
+        *)     docker compose logs --tail=50 -f remnawave ;;
+    esac
+}
+do_restart() {
+    local s="${1:-all}"; cd "$DIR"
+    case $s in
+        nginx)  docker compose restart remnawave-nginx; ok "Nginx перезапущен" ;;
+        panel)  docker compose restart remnawave; ok "Панель перезапущена" ;;
+        sub)    docker compose restart remnawave-subscription-page; ok "Sub перезапущена" ;;
+        node)   docker compose restart remnanode; ok "Нода перезапущена" ;;
+        all)
+            docker compose down>/dev/null 2>&1 & spinner $! "Остановка..."
+            docker compose up -d>/dev/null 2>&1 & spinner $! "Запуск..."
+            ok "Всё перезапущено" ;;
+        *) echo "Укажите: all|nginx|panel|sub|node" ;;
+    esac
+}
+do_update() {
+    cd "$DIR"
+    docker compose pull>/dev/null 2>&1 & spinner $! "Загрузка..."
+    docker compose down>/dev/null 2>&1 & spinner $! "Остановка..."
+    docker compose up -d>/dev/null 2>&1 & spinner $! "Запуск..."
+    docker image prune -f>/dev/null 2>&1; ok "Обновлено"
+}
+do_ssl() {
+    certbot renew --quiet; cd "$DIR"
+    docker compose restart remnawave-nginx
+    ok "SSL обновлён"
+}
+do_backup() {
+    local ts=$(date +%Y%m%d_%H%M%S) b="$DIR/backups"; mkdir -p "$b"; cd "$DIR"
+    docker compose exec -T remnawave-db pg_dump -U postgres postgres>"$b/db_$ts.sql" 2>/dev/null \
+        && ok "БД → $b/db_$ts.sql" || warn "Ошибка бэкапа БД"
+    tar -czf "$b/configs_$ts.tar.gz" "$DIR/.env" "$DIR/docker-compose.yml" "$DIR/nginx.conf" 2>/dev/null
+    ok "Конфиги → $b/configs_$ts.tar.gz"
+    find "$b" -mtime +7 -delete 2>/dev/null||true
+}
+do_health() {
+    do_status; echo ""
+    echo -e "${WHITE}🔒 SSL:${NC}"
+    for d in /etc/letsencrypt/live/*/; do
+        dom=$(basename "$d")
+        exp=$(openssl x509 -in "$d/fullchain.pem" -noout -enddate 2>/dev/null|sed 's/notAfter=//')
+        [ -n "$exp" ] && echo -e "  ${GREEN}✓${NC} $dom — $exp"
+    done; echo ""
+    echo -e "${WHITE}Nginx:${NC}"
+    docker exec remnawave-nginx nginx -t 2>&1|sed 's/^/  /'||true; echo ""
+    echo -e "${WHITE}API:${NC}"
+    curl -s --max-time 5 "http://127.0.0.1:3000/api/auth/status" \
+        -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Forwarded-Proto: https' 2>/dev/null | \
+        jq -e '.response'>/dev/null 2>&1 \
+        && echo -e "  ${GREEN}✓${NC} API доступен" || echo -e "  ${RED}✗${NC} API недоступен"
+}
+do_open_port() {
+    local nc="/opt/remnawave/nginx.conf"
+    local pd; pd=$(grep -m1 "server_name " "$nc"|awk '{print $2}'|tr -d ';')
+    ss -tuln|grep -q ":8443" && { warn "Порт 8443 занят"; return 1; }
+    sed -i "/server_name $pd;/a \\    listen 8443 ssl;" "$nc"
+    cd /opt/remnawave && docker compose restart remnawave-nginx>/dev/null 2>&1
+    ufw allow 8443/tcp>/dev/null 2>&1; ufw reload>/dev/null 2>&1
+    local ck cv
+    ck=$(grep "map \$http_cookie" "$nc" -A2|grep -oP '~\*\K\w+(?==)')
+    cv=$(grep "map \$http_cookie" "$nc" -A2|grep -oP '=\K\w+(?= 1)')
+    ok "Порт 8443 открыт."
+    echo -e "  ${WHITE}https://${pd}:8443/auth/login?${ck}=${cv}${NC}"
+    warn "Закройте после работы: remnawave_panel close_port"
+}
+do_close_port() {
+    local nc="/opt/remnawave/nginx.conf"
+    local pd; pd=$(grep -m1 "server_name " "$nc"|awk '{print $2}'|tr -d ';')
+    sed -i "/server_name $pd;/,/}/{s/    listen 8443 ssl;//}" "$nc"
+    cd /opt/remnawave && docker compose restart remnawave-nginx>/dev/null 2>&1
+    ufw delete allow 8443/tcp>/dev/null 2>&1; ufw reload>/dev/null 2>&1
+    ok "Порт 8443 закрыт"
+}
+do_migrate() {
+    echo -e "${PURPLE}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}║  📦 Перенос Panel на другой сервер       ║${NC}"
+    echo -e "${PURPLE}╚══════════════════════════════════════════╝${NC}"
+    command -v sshpass &>/dev/null || apt-get install -y -q sshpass 2>/dev/null
+    local rip rport ruser rpass
+    while true; do
+        read -p "  IP нового сервера: " rip</dev/tty
+        [[ "$rip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && break
+        echo "  Неверный формат IP"
+    done
+    read -p "  SSH-порт [22]: " rport</dev/tty; rport="${rport:-22}"
+    read -p "  Пользователь [root]: " ruser</dev/tty; ruser="${ruser:-root}"
+    while true; do
+        read -s -p "  Пароль SSH: " rpass</dev/tty; echo
+        [ -n "$rpass" ] && break; echo "  Пароль не может быть пустым"
+    done
+    local SO="-p $rport -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=no"
+    RUN() { sshpass -p "$rpass" ssh $SO "${ruser}@${rip}" "$@"; }
+    PUT() { sshpass -p "$rpass" scp -r $SO "$@"; }
+    RUN "echo ok">/dev/null 2>&1 || { echo -e "${RED}✗ Не удалось подключиться${NC}"; return 1; }
+    ok "SSH соединение установлено"
+    RUN bash -s <<'RDEPS'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y -q
+apt-get install -y -q curl wget git jq openssl ca-certificates gnupg dnsutils certbot python3-certbot-dns-cloudflare 2>/dev/null
+command -v docker &>/dev/null || { curl -fsSL https://get.docker.com|sh>/dev/null 2>&1; systemctl enable docker>/dev/null 2>&1; }
+[ ! -f /swapfile ] && { fallocate -l 2G /swapfile&&chmod 600 /swapfile&&mkswap /swapfile&&swapon /swapfile&&echo '/swapfile none swap sw 0 0'>>/etc/fstab; }
+ufw allow 22/tcp>/dev/null 2>&1; ufw allow 443/tcp>/dev/null 2>&1; ufw --force enable>/dev/null 2>&1
+mkdir -p /opt/remnawave /var/www/html
+RDEPS
+    local dump="/tmp/panel_migrate_$(date +%Y%m%d_%H%M%S).sql"
+    cd /opt/remnawave
+    docker compose exec -T remnawave-db pg_dump -U postgres postgres>"$dump" 2>/dev/null
+    ok "Дамп БД создан"
+    PUT "$dump" "$DIR/.env" "$DIR/docker-compose.yml" "$DIR/nginx.conf" "${ruser}@${rip}:/opt/remnawave/">/dev/null 2>&1
+    RUN "mkdir -p /etc/letsencrypt">/dev/null 2>&1
+    PUT /etc/letsencrypt/live /etc/letsencrypt/archive /etc/letsencrypt/renewal \
+        "${ruser}@${rip}:/etc/letsencrypt/">/dev/null 2>&1||warn "Ошибка передачи SSL"
+    PUT /var/www/html/. "${ruser}@${rip}:/var/www/html/">/dev/null 2>&1||warn "Ошибка передачи сайта"
+    ok "Файлы переданы"
+    local dumpb; dumpb=$(basename "$dump")
+    RUN bash -s <<RSTART
+set -e; cd /opt/remnawave
+docker volume rm remnawave-db-data 2>/dev/null||true
+docker compose up -d remnawave-db remnawave-redis>/dev/null 2>&1; sleep 15
+docker compose exec -T remnawave-db psql -U postgres postgres</opt/remnawave/$(basename $dump)>/dev/null 2>&1||true
+docker compose up -d>/dev/null 2>&1
+RSTART
+    ok "Стек запущен на новом сервере"
+    PUT /usr/local/bin/remnawave_panel "${ruser}@${rip}:/usr/local/bin/remnawave_panel">/dev/null 2>&1
+    RUN "chmod +x /usr/local/bin/remnawave_panel && grep -q 'alias rp=' /etc/bash.bashrc||echo \"alias rp='remnawave_panel'\">>/etc/bash.bashrc">/dev/null 2>&1
+    rm -f "$dump"; RUN "rm -f /opt/remnawave/$(basename $dump)">/dev/null 2>&1
+    ok "Перенос завершён!"
+    echo ""
+    warn "Обновите DNS-записи на новый IP: $rip"
+    warn "После обновления DNS перевыпустите SSL: ssh root@$rip remnawave_panel ssl"
+}
+show_menu() {
+    clear
+    echo -e "${PURPLE}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}║   🛡️  REMNAWAVE PANEL — УПРАВЛЕНИЕ                ║${NC}"
+    echo -e "${PURPLE}╚══════════════════════════════════════════════════╝${NC}"
+    for c in remnawave remnawave-nginx remnawave-subscription-page remnanode; do
+        s=$(docker ps --format '{{.Status}}' -f "name=$c" 2>/dev/null|head -1)
+        [ -n "$s" ] && echo -e "  ${GREEN}●${NC} $c" || echo -e "  ${RED}○${NC} $c"
+    done; echo ""
+    echo "  1) 📋 Логи    2) 📊 Статус   3) 🔄 Перезапуск"
+    echo "  4) ▶️  Старт   5) 📦 Обновить 6) 🔒 SSL"
+    echo "  7) 💾 Бэкап   8) 🏥 Диагноз  9) 🔓 Порт 8443"
+    echo " 10) 🔐 Закрыть 11) 📦 Перенос"
+    echo "  q) Выход"; echo ""
+}
+case "$1" in
+    status)      do_status ;;
+    logs)        do_logs "${2:-panel}" ;;
+    restart)     do_restart "${2:-all}" ;;
+    start)       cd /opt/remnawave && docker compose up -d; ok "Запущено" ;;
+    stop)        cd /opt/remnawave && docker compose down; ok "Остановлено" ;;
+    update)      do_update ;;
+    ssl)         do_ssl ;;
+    backup)      do_backup ;;
+    health)      do_health ;;
+    open_port)   do_open_port ;;
+    close_port)  do_close_port ;;
+    migrate)     do_migrate ;;
+    help|--help)
+        echo "remnawave_panel (rp) — управление Remnawave Panel"
+        echo "Команды: status logs restart start stop update ssl backup health open_port close_port migrate"
+        ;;
+    "")
+        while true; do
+            show_menu
+            read -p "Выбор: " ch</dev/tty
+            case $ch in
+                1) read -p "  Логи (panel/nginx/sub/node) [panel]: " s</dev/tty; do_logs "${s:-panel}" ;;
+                2) do_status; read -p "Enter..."</dev/tty ;;
+                3) read -p "  Что перезапустить? [all]: " s</dev/tty; do_restart "${s:-all}"; read -p "Enter..."</dev/tty ;;
+                4) cd /opt/remnawave && docker compose up -d; ok "Запущено"; read -p "Enter..."</dev/tty ;;
+                5) do_update; read -p "Enter..."</dev/tty ;;
+                6) do_ssl; read -p "Enter..."</dev/tty ;;
+                7) do_backup; read -p "Enter..."</dev/tty ;;
+                8) do_health; read -p "Enter..."</dev/tty ;;
+                9) do_open_port; read -p "Enter..."</dev/tty ;;
+               10) do_close_port; read -p "Enter..."</dev/tty ;;
+               11) do_migrate; read -p "Enter..."</dev/tty ;;
+                q|Q) exit 0 ;;
+                *) sleep 0.3 ;;
+            esac
+        done ;;
+    *) echo "Неизвестная команда. rp help"; exit 1 ;;
+esac
+MGMTEOF
+    chmod +x "$mgmt"
+    grep -q "alias rp=" /etc/bash.bashrc 2>/dev/null || \
+        echo "alias rp='remnawave_panel'" >> /etc/bash.bashrc
+    ok "Команда 'remnawave_panel' (rp) создана"
+}
+
+panel_menu() {
+    header "Remnawave Panel"
+    echo -e "  ${BOLD}1)${RESET} Установить"
+    echo -e "  ${BOLD}2)${RESET} Управление (remnawave_panel)"
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch
+    read -rp "Выбор: " ch
+    case "$ch" in
+        1) panel_install ;;
+        2) [ -x "$PANEL_MGMT_SCRIPT" ] && exec "$PANEL_MGMT_SCRIPT" \
+            || warn "Панель не установлена. Сначала выполните установку." ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    panel_menu
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# ████████████████████  TELEMT SECTION  ████████████████████████████
+# ═══════════════════════════════════════════════════════════════════
+
+TELEMT_GITHUB_REPO="telemt/telemt"
+TELEMT_API_URL="http://127.0.0.1:9091/v1/users"
+TELEMT_BIN="/usr/local/bin/telemt"
+TELEMT_CONFIG_DIR="/etc/telemt"
+TELEMT_CONFIG_SYSTEMD="$TELEMT_CONFIG_DIR/telemt.toml"
+TELEMT_WORK_DIR_SYSTEMD="/opt/telemt"
+TELEMT_TLSFRONT_DIR="/opt/telemt/tlsfront"
+TELEMT_SERVICE_FILE="/etc/systemd/system/telemt.service"
+TELEMT_WORK_DIR_DOCKER="${HOME}/mtproxy"
+TELEMT_CONFIG_DOCKER="${HOME}/mtproxy/telemt.toml"
+TELEMT_COMPOSE_FILE="${HOME}/mtproxy/docker-compose.yml"
+TELEMT_MODE=""        # "systemd" или "docker"
+TELEMT_CONFIG_FILE="" # устанавливается после выбора
+TELEMT_WORK_DIR=""
+
+telemt_choose_mode() {
+    header "telemt MTProxy — метод установки"
+    echo -e "  ${BOLD}1)${RESET} ${BOLD}systemd${RESET} — бинарник с GitHub"
+    echo -e "     ${CYAN}Рекомендуется:${RESET} hot reload, меньше RAM, миграция"
+    echo ""
+    echo -e "  ${BOLD}2)${RESET} ${BOLD}Docker${RESET} — образ с Docker Hub"
+    echo ""
+    read -rp "Выбор [1/2]: " ch
+    case "$ch" in
+        1) TELEMT_MODE="systemd"; TELEMT_CONFIG_FILE="$TELEMT_CONFIG_SYSTEMD"; TELEMT_WORK_DIR="$TELEMT_WORK_DIR_SYSTEMD" ;;
+        2) TELEMT_MODE="docker";  TELEMT_CONFIG_FILE="$TELEMT_CONFIG_DOCKER";  TELEMT_WORK_DIR="$TELEMT_WORK_DIR_DOCKER" ;;
+        *) warn "Неверный выбор"; telemt_choose_mode ;;
+    esac
+    success "Режим: $TELEMT_MODE"
+}
+
+telemt_check_deps() {
+    for cmd in curl openssl python3; do
+        command -v "$cmd" &>/dev/null || die "Не найдена команда: $cmd"
+    done
+    if [ "$TELEMT_MODE" = "docker" ]; then
+        command -v docker &>/dev/null || die "Docker не установлен."
+        docker compose version &>/dev/null || die "Нужен Docker Compose v2."
+    else
+        command -v systemctl &>/dev/null || die "systemctl не найден. Используй Docker-режим."
+    fi
+}
+
+telemt_is_running() {
+    if [ "$TELEMT_MODE" = "systemd" ]; then
+        systemctl is-active --quiet telemt 2>/dev/null
+    else
+        docker compose -f "$TELEMT_COMPOSE_FILE" ps --status running 2>/dev/null | grep -q "telemt"
+    fi
+}
+
+TELEMT_CHOSEN_VERSION="latest"
+
+telemt_pick_version() {
+    info "Получаю список версий..."
+    local versions
+    versions=$(curl -fsSL --max-time 10 \
+        "https://api.github.com/repos/${TELEMT_GITHUB_REPO}/releases?per_page=10" 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+' | head -10 || true)
+    [ -z "$versions" ] && { warn "Не удалось получить список. Используется latest."; TELEMT_CHOSEN_VERSION="latest"; return; }
+    echo ""
+    echo -e "${BOLD}Доступные версии:${RESET}"
+    local i=1; local -a va=()
+    while IFS= read -r v; do
+        [ $i -eq 1 ] && echo -e "  ${GREEN}${BOLD}$i)${RESET} $v  ${CYAN}← последняя${RESET}" \
+                      || echo -e "  ${BOLD}$i)${RESET} $v"
+        va+=("$v"); i=$((i+1))
+    done <<< "$versions"
+    echo ""
+    local ch; read -rp "Версия [1]: " ch; ch="${ch:-1}"
+    if echo "$ch" | grep -qE '^[0-9]+$' && [ "$ch" -ge 1 ] && [ "$ch" -le "${#va[@]}" ]; then
+        TELEMT_CHOSEN_VERSION="${va[$((ch-1))]}"
+    else
+        warn "Неверный выбор, используется latest."; TELEMT_CHOSEN_VERSION="latest"
+    fi
+}
+
+telemt_download_binary() {
+    local ver="${1:-latest}" arch libc url
+    arch=$(uname -m); case "$arch" in x86_64) ;; aarch64|arm64) arch="aarch64" ;; *) die "Архитектура не поддерживается: $arch" ;; esac
+    ldd --version 2>&1 | grep -iq musl && libc="musl" || libc="gnu"
+    [ "$ver" = "latest" ] \
+        && url="https://github.com/${TELEMT_GITHUB_REPO}/releases/latest/download/telemt-${arch}-linux-${libc}.tar.gz" \
+        || url="https://github.com/${TELEMT_GITHUB_REPO}/releases/download/${ver}/telemt-${arch}-linux-${libc}.tar.gz"
+    info "Скачиваю telemt $ver..."
+    local tmp; tmp=$(mktemp -d)
+    curl -fsSL "$url" | tar -xz -C "$tmp" && install -m 0755 "$tmp/telemt" "$TELEMT_BIN" && rm -rf "$tmp" \
+        && success "Установлен: $TELEMT_BIN" || { rm -rf "$tmp"; die "Не удалось скачать бинарник."; }
+}
+
+telemt_write_config() {
+    local port="$1" domain="$2"; shift 2
+    local tls_front_dir api_listen api_wl
+    if [ "$TELEMT_MODE" = "systemd" ]; then
+        mkdir -p "$TELEMT_CONFIG_DIR" "$TELEMT_TLSFRONT_DIR"
+        tls_front_dir="$TELEMT_TLSFRONT_DIR"; api_listen="127.0.0.1:9091"; api_wl='["127.0.0.1/32"]'
+    else
+        mkdir -p "$TELEMT_WORK_DIR_DOCKER"; tls_front_dir="tlsfront"; api_listen="0.0.0.0:9091"; api_wl='["127.0.0.0/8"]'
+    fi
+    { cat <<EOF
+[general]
+use_middle_proxy = true
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure  = false
+tls     = true
+
+[general.links]
+show = "*"
+
+[server]
+port = $port
+
+[server.api]
+enabled   = true
+listen    = "$api_listen"
+whitelist = $api_wl
+
+[[server.listeners]]
+ip = "0.0.0.0"
+
+[censorship]
+tls_domain    = "$domain"
+mask          = true
+tls_emulation = true
+tls_front_dir = "$tls_front_dir"
+
+[access.users]
+EOF
+      for pair in "$@"; do echo "${pair%% *} = \"${pair#* }\""; done
+    } > "$TELEMT_CONFIG_FILE"
+    [ "$TELEMT_MODE" = "systemd" ] && chmod 640 "$TELEMT_CONFIG_FILE"
+}
+
+telemt_write_service() {
+    cat > "$TELEMT_SERVICE_FILE" <<'EOF'
+[Unit]
+Description=Telemt MTProto Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telemt
+Group=telemt
+WorkingDirectory=/opt/telemt
+ExecStart=/usr/local/bin/telemt /etc/telemt/telemt.toml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+telemt_write_compose() {
+    local port="$1"
+    cat > "$TELEMT_COMPOSE_FILE" <<EOF
+services:
+  telemt:
+    image: whn0thacked/telemt-docker:latest
+    container_name: telemt
+    restart: unless-stopped
+    environment:
+      RUST_LOG: "info"
+    volumes:
+      - ./telemt.toml:/etc/telemt.toml:ro
+    ports:
+      - "${port}:${port}/tcp"
+      - "127.0.0.1:9091:9091/tcp"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs: [/tmp:rw,nosuid,nodev,noexec,size=16m]
+    ulimits: {nofile: {soft: 65536, hard: 65536}}
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+EOF
+}
+
+telemt_fetch_links() {
+    local attempt=0
+    info "Запрашиваю данные через API..."
+    while [ $attempt -lt 15 ]; do
+        local resp; resp=$(curl -s --max-time 5 "$TELEMT_API_URL" 2>/dev/null || true)
+        if echo "$resp" | grep -q "tg://proxy"; then
+            echo ""
+            echo "$resp" | python3 -c "
+import sys, json
+BOLD='\\033[1m'; CYAN='\\033[0;36m'; GREEN='\\033[0;32m'; GRAY='\\033[0;37m'; RESET='\\033[0m'
+def fmt_bytes(b):
+    if not b: return '0 B'
+    for u in ('B','KB','MB','GB','TB'):
+        if b < 1024: return f'{b:.1f} {u}' if u != 'B' else f'{int(b)} B'
+        b /= 1024
+    return f'{b:.2f} PB'
+data = json.load(sys.stdin)
+users = data if isinstance(data, list) else data.get('users', data.get('data', []))
+if isinstance(users, dict): users = list(users.values())
+for u in users:
+    name = u.get('username') or u.get('name') or 'user'
+    tls  = u.get('links', {}).get('tls', [])
+    conns = u.get('current_connections', 0)
+    aips  = u.get('active_unique_ips', 0)
+    al    = u.get('active_unique_ips_list', [])
+    rips  = u.get('recent_unique_ips', 0)
+    rl    = u.get('recent_unique_ips_list', [])
+    oct   = u.get('total_octets', 0)
+    mc    = u.get('max_tcp_conns')
+    mi    = u.get('max_unique_ips')
+    q     = u.get('data_quota_bytes')
+    exp   = u.get('expiration_rfc3339')
+    print(f'{BOLD}{CYAN}┌─ {name}{RESET}')
+    if tls: print(f'{BOLD}│  Ссылка:{RESET}      {tls[0]}')
+    print(f'{BOLD}│  Подключений:{RESET} {conns}' + (f' / {mc}' if mc else ''))
+    print(f'{BOLD}│  Активных IP:{RESET} {aips}' + (f' / {mi}' if mi else ''))
+    for ip in al: print(f'{BOLD}│{RESET}    {GREEN}▸ {ip}{RESET}')
+    print(f'{BOLD}│  Недавних IP:{RESET} {rips}')
+    print(f'{BOLD}│  Трафик:{RESET}      {fmt_bytes(oct)}' + (f' / {fmt_bytes(q)}' if q else ''))
+    if exp: print(f'{BOLD}│  Истекает:{RESET}    {exp}')
+    print(f'{BOLD}└{chr(9472)*44}{RESET}'); print()
+" 2>/dev/null || echo "$resp"
+            return 0
+        fi
+        attempt=$((attempt+1)); sleep 2; echo -n "."
+    done
+    echo ""; warn "API не ответил. Попробуй: curl -s $TELEMT_API_URL"
+    return 1
+}
+
+telemt_ask_users() {
+    TELEMT_USER_PAIRS=()
+    info "Добавление пользователей"
+    while true; do
+        local uname; read -rp "  Имя [Enter чтобы завершить]: " uname
+        [ -z "$uname" ] && [ ${#TELEMT_USER_PAIRS[@]} -gt 0 ] && break
+        [ -z "$uname" ] && { warn "Нужен хотя бы один пользователь!"; continue; }
+        local secret; read -rp "  Секрет (32 hex) [Enter = сгенерировать]: " secret
+        if [ -z "$secret" ]; then
+            secret=$(gen_secret); success "Секрет: $secret"
+        elif ! echo "$secret" | grep -qE '^[0-9a-fA-F]{32}$'; then
+            warn "Секрет должен быть 32 hex-символа"; continue
+        fi
+        TELEMT_USER_PAIRS+=("$uname $secret"); success "Пользователь '$uname' добавлен"
+        echo ""
+    done
+}
+
+telemt_menu_install() {
+    header "Установка MTProxy (${TELEMT_MODE})"
+    [ "$TELEMT_MODE" = "systemd" ] && need_root
+    local port; read -rp "Порт прокси [8443]: " port; port="${port:-8443}"
+    ss -tlnp 2>/dev/null | grep -q ":${port} " && { warn "Порт $port занят!"; read -rp "Другой порт: " port; }
+    local domain; read -rp "Домен-маскировка [petrovich.ru]: " domain; domain="${domain:-petrovich.ru}"
+    echo ""; telemt_ask_users
+
+    if [ "$TELEMT_MODE" = "systemd" ]; then
+        telemt_pick_version
+        telemt_download_binary "$TELEMT_CHOSEN_VERSION"
+        id telemt &>/dev/null || useradd -d "$TELEMT_WORK_DIR" -m -r -U telemt
+        telemt_write_config "$port" "$domain" "${TELEMT_USER_PAIRS[@]}"
+        mkdir -p "$TELEMT_TLSFRONT_DIR"
+        chown -R telemt:telemt "$TELEMT_CONFIG_DIR" "$TELEMT_WORK_DIR"
+        telemt_write_service
+        systemctl daemon-reload; systemctl enable telemt; systemctl start telemt
+        success "Сервис запущен"
+    else
+        telemt_write_config "$port" "$domain" "${TELEMT_USER_PAIRS[@]}"
+        telemt_write_compose "$port"
+        cd "$TELEMT_WORK_DIR_DOCKER"
+        docker compose pull -q; docker compose up -d
+        success "Контейнер запущен"
+    fi
+    command -v ufw &>/dev/null && ufw allow "${port}/tcp" &>/dev/null && success "ufw: порт $port открыт"
+    sleep 3; header "Ссылки"
+    echo -e "${BOLD}IP:${RESET} $(get_public_ip)"
+    telemt_fetch_links
+}
+
+telemt_menu_add_user() {
+    header "Добавить пользователя"
+    [ "$TELEMT_MODE" = "systemd" ] && need_root
+    [ ! -f "$TELEMT_CONFIG_FILE" ] && die "Конфиг не найден. Сначала выполни установку."
+    local uname; read -rp "  Имя: " uname; [ -z "$uname" ] && die "Имя не может быть пустым"
+    grep -q "^${uname} = " "$TELEMT_CONFIG_FILE" && die "Пользователь '$uname' уже существует"
+    local secret; read -rp "  Секрет [Enter = сгенерировать]: " secret
+    [ -z "$secret" ] && { secret=$(gen_secret); success "Секрет: $secret"; } \
+        || echo "$secret" | grep -qE '^[0-9a-fA-F]{32}$' || die "Секрет должен быть 32 hex"
+    echo ""; echo -e "${BOLD}Ограничения (Enter = пропустить):${RESET}"
+    local mc mi qg ed
+    read -rp "  Макс. подключений:    " mc
+    read -rp "  Макс. уникальных IP:  " mi
+    read -rp "  Квота трафика (ГБ):   " qg
+    read -rp "  Срок действия (дней): " ed
+    echo "$uname = \"$secret\"" >> "$TELEMT_CONFIG_FILE"
+    local has=0 block=""
+    [ -n "$mc" ] && { block+="\nmax_tcp_conns = $mc"; has=1; }
+    [ -n "$mi" ] && { block+="\nmax_unique_ips = $mi"; has=1; }
+    [ -n "$qg" ] && { local qb; qb=$(python3 -c "print(int($qg*1024**3))"); block+="\ndata_quota_bytes = $qb"; has=1; }
+    [ -n "$ed" ] && { local exp; exp=$(python3 -c "from datetime import datetime,timezone,timedelta; dt=datetime.now(timezone.utc)+timedelta(days=int($ed)); print(dt.strftime('%Y-%m-%dT%H:%M:%SZ'))"); block+="\nexpiration_rfc3339 = \"$exp\""; has=1; }
+    [ "$has" -eq 1 ] && { printf "\n[access.user_limits.$uname]$block\n" >> "$TELEMT_CONFIG_FILE"; success "Ограничения применены"; }
+    success "Пользователь '$uname' добавлен"
+    telemt_is_running && {
+        if [ "$TELEMT_MODE" = "systemd" ]; then
+            info "Hot reload..."
+            systemctl reload telemt 2>/dev/null || systemctl restart telemt
+        else
+            cd "$TELEMT_WORK_DIR_DOCKER" && docker compose restart telemt
+        fi; sleep 2
+    }
+    header "Ссылки"; telemt_fetch_links
+}
+
+telemt_menu_links()  { header "Пользователи и ссылки"; telemt_is_running || die "Сервис не запущен."; telemt_fetch_links; }
+
+telemt_menu_status() {
+    header "Статус"
+    if [ "$TELEMT_MODE" = "systemd" ]; then
+        systemctl status telemt --no-pager||true; echo ""; info "Последние логи:"; journalctl -u telemt --no-pager -n 30
+    else
+        cd "$TELEMT_WORK_DIR_DOCKER" 2>/dev/null || die "Директория не найдена"
+        docker compose ps; echo ""; info "Последние логи:"; docker compose logs --tail=20
+    fi
+}
+
+telemt_menu_update() {
+    header "Обновление"
+    if [ "$TELEMT_MODE" = "systemd" ]; then
+        need_root
+        info "Текущая версия: $($TELEMT_BIN --version 2>/dev/null||echo неизвестна)"
+        telemt_pick_version; systemctl stop telemt
+        telemt_download_binary "$TELEMT_CHOSEN_VERSION"; systemctl start telemt
+    else
+        cd "$TELEMT_WORK_DIR_DOCKER" || die "Директория не найдена"
+        docker compose pull; docker compose up -d
+    fi
+    success "Обновлено"
+}
+
+telemt_menu_stop() {
+    header "Остановка"
+    if [ "$TELEMT_MODE" = "systemd" ]; then need_root; systemctl stop telemt
+    else cd "$TELEMT_WORK_DIR_DOCKER" || die ""; docker compose down; fi
+    success "Остановлено"
+}
+
+telemt_menu_migrate() {
+    header "Миграция MTProxy на новый сервер"
+    need_root
+    [ "$TELEMT_MODE" != "systemd" ] && die "Миграция доступна только в systemd-режиме."
+    [ ! -f "$TELEMT_CONFIG_FILE" ] && die "Конфиг не найден."
+    ensure_sshpass
+
+    echo -e "${BOLD}Данные нового сервера:${RESET}"; echo ""
+    local nh np nu npass
+    read -rp "  IP нового сервера: " nh; [ -z "$nh" ] && die "Адрес не может быть пустым"
+    read -rp "  SSH порт [22]: " np; np="${np:-22}"
+    read -rp "  Пользователь [root]: " nu; nu="${nu:-root}"
+    read -rsp "  Пароль: " npass; echo ""; [ -z "$npass" ] && die "Пароль не может быть пустым"
+
+    local SO="-p $np -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+    RRUN() { sshpass -p "$npass" ssh  $SO "${nu}@${nh}" "$@"; }
+    RSCP() { sshpass -p "$npass" scp  $SO "$@" "${nu}@${nh}:/tmp/"; }
+
+    RRUN "echo ok" &>/dev/null || die "Не удалось подключиться."
+    success "SSH подключение успешно"
+
+    local cur_port cur_domain
+    cur_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" | head -1 | grep -oE "[0-9]+" || echo "8443")
+    cur_domain=$(grep -E "^tls_domain\s*=" "$TELEMT_CONFIG_FILE" | head -1 | grep -oP '"K[^"]+' || echo "petrovich.ru")
+    echo ""; echo -e "${BOLD}Текущие настройки:${RESET} порт=$cur_port домен=$cur_domain"
+    local new_pp new_dom
+    read -rp "  Порт на новом сервере [Enter=$cur_port]: " new_pp; new_pp="${new_pp:-$cur_port}"
+    read -rp "  Домен-маскировка [Enter=$cur_domain]: " new_dom; new_dom="${new_dom:-$cur_domain}"
+
+    local users_block
+    users_block=$(awk '/^\[access\.users\]/{found=1;next} found&&/^\[/{exit} found&&/=/{print}' "$TELEMT_CONFIG_FILE")
+    [ -z "$users_block" ] && die "Не найдено пользователей в конфиге"
+    success "Пользователей: $(echo "$users_block" | grep -c "=")"
+
+    local remote_config
+    remote_config="$(cat <<RCONF
+[general]
+use_middle_proxy = true
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure  = false
+tls     = true
+
+[general.links]
+show = "*"
+
+[server]
+port = $new_pp
+
+[server.api]
+enabled   = true
+listen    = "127.0.0.1:9091"
+whitelist = ["127.0.0.1/32"]
+
+[[server.listeners]]
+ip = "0.0.0.0"
+
+[censorship]
+tls_domain    = "$new_dom"
+mask          = true
+tls_emulation = true
+tls_front_dir = "$TELEMT_TLSFRONT_DIR"
+
+[access.users]
+$users_block
+RCONF
+)"
+    local limits_block
+    limits_block=$(awk '/^\[access\.user_limits\./{found=1} found{print}' "$TELEMT_CONFIG_FILE" || true)
+
+    info "Копирую скрипт на новый сервер..."
+    RSCP "$(realpath "$0")" &>/dev/null; success "Скрипт скопирован в /tmp/"
+    info "Копирую конфиг..."
+    echo "$remote_config" | RRUN "mkdir -p /etc/telemt && cat > /etc/telemt/telemt.toml"
+    [ -n "$limits_block" ] && { echo "$limits_block" | RRUN "echo '' >> /etc/telemt/telemt.toml && cat >> /etc/telemt/telemt.toml"; success "Лимиты перенесены"; }
+
+    header "Установка на $nh"
+    RRUN bash << REMOTE_INSTALL
+set -e
+ARCH=\$(uname -m); case "\$ARCH" in x86_64) ;; aarch64) ARCH="aarch64" ;; *) echo "Архитектура не поддерживается"; exit 1 ;; esac
+LIBC=\$(ldd --version 2>&1|grep -iq musl&&echo musl||echo gnu)
+URL="https://github.com/telemt/telemt/releases/latest/download/telemt-\${ARCH}-linux-\${LIBC}.tar.gz"
+TMP=\$(mktemp -d); curl -fsSL "\$URL"|tar -xz -C "\$TMP"; install -m 0755 "\$TMP/telemt" /usr/local/bin/telemt; rm -rf "\$TMP"
+echo "[OK] Telemt установлен"
+id telemt &>/dev/null||useradd -d /opt/telemt -m -r -U telemt
+mkdir -p /opt/telemt/tlsfront; chown -R telemt:telemt /etc/telemt /opt/telemt
+cat > /etc/systemd/system/telemt.service << 'SERVICE'
+[Unit]
+Description=Telemt MTProto Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telemt
+Group=telemt
+WorkingDirectory=/opt/telemt
+ExecStart=/usr/local/bin/telemt /etc/telemt/telemt.toml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecReload=/bin/kill -HUP \$MAINPID
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload; systemctl enable telemt; systemctl restart telemt
+echo "[OK] Сервис запущен"
+command -v ufw &>/dev/null && ufw allow ${new_pp}/tcp &>/dev/null && echo "[OK] Порт $new_pp открыт"
+REMOTE_INSTALL
+
+    success "Установка завершена!"
+    header "Новые ссылки"; echo -e "${BOLD}Новый IP:${RESET} $nh"; info "Жду запуска..."; sleep 5
+    local nl; nl=$(RRUN "curl -s --max-time 10 http://127.0.0.1:9091/v1/users 2>/dev/null"||true)
+    if echo "$nl" | grep -q "tg://proxy"; then
+        echo "$nl" | python3 -c "
+import sys,json
+BOLD='\\033[1m'; CYAN='\\033[0;36m'; RESET='\\033[0m'
+data=json.load(sys.stdin); users=data if isinstance(data,list) else data.get('users',data.get('data',[]))
+if isinstance(users,dict): users=list(users.values())
+for u in users:
+    name=u.get('username') or u.get('name') or 'user'
+    tls=u.get('links',{}).get('tls',[])
+    print(f'{BOLD}{CYAN}┌─ {name}{RESET}')
+    if tls: print(f'{BOLD}│  Ссылка:{RESET}  {tls[0]}')
+    print(f'{BOLD}└{chr(9472)*44}{RESET}'); print()
+" 2>/dev/null
+        success "Миграция завершена! Разошли новые ссылки."
+        warn "Старый сервер ещё работает. Когда будешь готов: systemctl stop telemt"
+    else
+        warn "Сервис запущен, но API пока не ответил. Проверь: curl -s http://127.0.0.1:9091/v1/users"
+    fi
+}
+
+telemt_main_menu() {
+    local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
+    header "telemt MTProxy [${mode_label}]"
+    echo -e "  ${BOLD}1)${RESET} Установить"
+    echo -e "  ${BOLD}2)${RESET} Добавить пользователя"
+    echo -e "  ${BOLD}3)${RESET} Пользователи и ссылки"
+    echo -e "  ${BOLD}4)${RESET} Статус и логи"
+    echo -e "  ${BOLD}5)${RESET} Обновить"
+    echo -e "  ${BOLD}6)${RESET} Остановить"
+    [ "$TELEMT_MODE" = "systemd" ] && echo -e "  ${BOLD}7)${RESET} Мигрировать на новый сервер"
+    echo -e "  ${BOLD}8)${RESET} Сменить режим (systemd ↔ Docker)"
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch
+    case "$ch" in
+        1) telemt_menu_install ;;
+        2) telemt_menu_add_user ;;
+        3) telemt_menu_links ;;
+        4) telemt_menu_status ;;
+        5) telemt_menu_update ;;
+        6) telemt_menu_stop ;;
+        7) [ "$TELEMT_MODE" = "systemd" ] && telemt_menu_migrate || warn "Только для systemd" ;;
+        8) telemt_choose_mode; telemt_check_deps ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    telemt_main_menu
+}
+
+telemt_section() {
+    [ -z "$TELEMT_MODE" ] && telemt_choose_mode
+    telemt_check_deps
+    telemt_main_menu
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# ████████████████████  MIGRATE SECTION  ███████████████████████████
+# ═══════════════════════════════════════════════════════════════════
+
+migrate_all() {
+    header "Перенос всего стека (Panel + MTProxy)"
+    echo -e "${YELLOW}  Переносит Panel и MTProxy (systemd) на один новый сервер.${NC}"
+    echo -e "${YELLOW}  Панель и MTProxy должны быть установлены на этом сервере.${NC}"
+    echo ""
+    ensure_sshpass
+
+    local rip rport ruser rpass
+    while true; do
+        read -p "  IP нового сервера: " rip < /dev/tty
+        [[ "$rip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && break
+        warn "Неверный формат IP"
+    done
+    read -p "  SSH-порт [22]: " rport < /dev/tty; rport="${rport:-22}"
+    read -p "  Пользователь [root]: " ruser < /dev/tty; ruser="${ruser:-root}"
+    while true; do
+        read -s -p "  Пароль SSH: " rpass < /dev/tty; echo
+        [ -n "$rpass" ] && break; warn "Пароль не может быть пустым"
+    done
+
+    local SO="-p $rport -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=no"
+    RUN() { sshpass -p "$rpass" ssh  $SO "${ruser}@${rip}" "$@"; }
+    PUT() { sshpass -p "$rpass" scp -r $SO "$@"; }
+
+    RUN "echo ok" >/dev/null 2>&1 || { warn "Не удалось подключиться к $rip:$rport"; return 1; }
+    ok "SSH соединение установлено"
+
+    # Зависимости
+    RUN bash -s << 'RDEPS'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y -q
+apt-get install -y -q curl wget git jq openssl ca-certificates gnupg dnsutils unzip cron \
+    certbot python3-certbot-dns-cloudflare 2>/dev/null
+command -v docker &>/dev/null || { curl -fsSL https://get.docker.com|sh>/dev/null 2>&1; systemctl enable docker>/dev/null 2>&1; }
+[ ! -f /swapfile ] && { fallocate -l 2G /swapfile&&chmod 600 /swapfile&&mkswap /swapfile&&swapon /swapfile&&echo '/swapfile none swap sw 0 0'>>/etc/fstab; }
+grep -q "net.ipv4.tcp_congestion_control = bbr" /etc/sysctl.conf || { echo "net.core.default_qdisc = fq">>/etc/sysctl.conf; echo "net.ipv4.tcp_congestion_control = bbr">>/etc/sysctl.conf; sysctl -p>/dev/null; }
+ufw allow 22/tcp>/dev/null 2>&1; ufw allow 443/tcp>/dev/null 2>&1; ufw --force enable>/dev/null 2>&1
+mkdir -p /opt/remnawave /var/www/html
+RDEPS
+    ok "Зависимости установлены"
+
+    # Panel
+    if [ -d /opt/remnawave ] && [ -f /opt/remnawave/docker-compose.yml ]; then
+        info "Перенос Panel..."
+        local dump="/tmp/panel_all_migrate_$(date +%Y%m%d_%H%M%S).sql"
+        cd /opt/remnawave
+        docker compose exec -T remnawave-db pg_dump -U postgres postgres > "$dump" 2>/dev/null
+        PUT "$dump" /opt/remnawave/.env /opt/remnawave/docker-compose.yml /opt/remnawave/nginx.conf \
+            "${ruser}@${rip}:/opt/remnawave/" 2>/dev/null
+        RUN "mkdir -p /etc/letsencrypt" 2>/dev/null
+        PUT /etc/letsencrypt/live /etc/letsencrypt/archive /etc/letsencrypt/renewal \
+            "${ruser}@${rip}:/etc/letsencrypt/" 2>/dev/null || warn "SSL: проверьте /etc/letsencrypt"
+        PUT /var/www/html/. "${ruser}@${rip}:/var/www/html/" 2>/dev/null || true
+        local db; db=$(basename "$dump")
+        RUN bash -s << RPANEL
+cd /opt/remnawave
+docker volume rm remnawave-db-data 2>/dev/null||true
+docker compose up -d remnawave-db remnawave-redis>/dev/null 2>&1; sleep 15
+docker compose exec -T remnawave-db psql -U postgres postgres</opt/remnawave/$db>/dev/null 2>&1||true
+docker compose up -d>/dev/null 2>&1
+RPANEL
+        rm -f "$dump"; RUN "rm -f /opt/remnawave/$db" 2>/dev/null || true
+        ok "Panel перенесена"
+        PUT /usr/local/bin/remnawave_panel "${ruser}@${rip}:/usr/local/bin/remnawave_panel" 2>/dev/null
+        RUN "chmod +x /usr/local/bin/remnawave_panel && grep -q 'alias rp=' /etc/bash.bashrc || echo \"alias rp='remnawave_panel'\">>/etc/bash.bashrc" 2>/dev/null || true
+    else
+        warn "Panel не найдена на этом сервере, пропускаю"
+    fi
+
+    # Telemt
+    if [ -f "$TELEMT_CONFIG_SYSTEMD" ]; then
+        info "Перенос MTProxy..."
+        local cp dp
+        cp=$(grep -E "^port\s*=" "$TELEMT_CONFIG_SYSTEMD" | head -1 | grep -oE "[0-9]+" || echo "8443")
+        dp=$(grep -E "^tls_domain\s*=" "$TELEMT_CONFIG_SYSTEMD" | head -1 | grep -oP '"K[^"]+' || echo "petrovich.ru")
+        local ub; ub=$(awk '/^\[access\.users\]/{f=1;next} f&&/^\[/{exit} f&&/=/{print}' "$TELEMT_CONFIG_SYSTEMD")
+        local lb; lb=$(awk '/^\[access\.user_limits\./{f=1} f{print}' "$TELEMT_CONFIG_SYSTEMD" || true)
+
+        local telemt_conf
+        telemt_conf=$(cat << 'NCONF'
+[general]
+use_middle_proxy = true
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure  = false
+tls     = true
+
+[general.links]
+show = "*"
+
+[server]
+NCONF
+)
+        telemt_conf="${telemt_conf}
+port = ${cp}
+
+[server.api]
+enabled   = true
+listen    = \"127.0.0.1:9091\"
+whitelist = [\"127.0.0.1/32\"]
+
+[[server.listeners]]
+ip = \"0.0.0.0\"
+
+[censorship]
+tls_domain    = \"${dp}\"
+mask          = true
+tls_emulation = true
+tls_front_dir = \"/opt/telemt/tlsfront\"
+
+[access.users]
+${ub}"
+        printf '%s\n' "$telemt_conf" | RUN "mkdir -p /etc/telemt && cat > /etc/telemt/telemt.toml"
+
+        [ -n "$lb" ] && echo "$lb" | RUN "echo '' >> /etc/telemt/telemt.toml && cat >> /etc/telemt/telemt.toml"
+
+        RUN bash << RTELEMT
+set -e
+ARCH=\$(uname -m); LIBC=\$(ldd --version 2>&1|grep -iq musl&&echo musl||echo gnu)
+URL="https://github.com/telemt/telemt/releases/latest/download/telemt-\${ARCH}-linux-\${LIBC}.tar.gz"
+TMP=\$(mktemp -d); curl -fsSL "\$URL"|tar -xz -C "\$TMP"; install -m 0755 "\$TMP/telemt" /usr/local/bin/telemt; rm -rf "\$TMP"
+id telemt &>/dev/null||useradd -d /opt/telemt -m -r -U telemt
+mkdir -p /opt/telemt/tlsfront; chown -R telemt:telemt /etc/telemt /opt/telemt
+cat > /etc/systemd/system/telemt.service << 'SVC'
+[Unit]
+Description=Telemt MTProto Proxy
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=telemt
+Group=telemt
+WorkingDirectory=/opt/telemt
+ExecStart=/usr/local/bin/telemt /etc/telemt/telemt.toml
+Restart=on-failure; RestartSec=5; LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecReload=/bin/kill -HUP \$MAINPID
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl daemon-reload; systemctl enable telemt; systemctl restart telemt
+command -v ufw &>/dev/null && ufw allow $cp/tcp &>/dev/null||true
+RTELEMT
+        ok "MTProxy перенесён"
+    else
+        warn "MTProxy (systemd) не найден на этом сервере, пропускаю"
+    fi
+
+    # Копируем этот же скрипт
+    PUT "$(realpath "$0")" "${ruser}@${rip}:$(realpath "$0")" 2>/dev/null || \
+        PUT "$(realpath "$0")" "${ruser}@${rip}:/root/setup.sh" 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║  ✅ ПЕРЕНОС ВСЕГО СТЕКА ЗАВЕРШЁН                     ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    warn "Обновите DNS-записи на новый IP: $rip"
+    warn "После обновления DNS — перевыпустите SSL:"
+    echo -e "  ${CYAN}ssh ${ruser}@${rip} remnawave_panel ssl${NC}"
+    warn "Старые сервисы ещё работают. Остановите когда будете готовы."
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# ███████████████████  HYSTERIA2 SECTION  ██████████████████████████
+# ═══════════════════════════════════════════════════════════════════
+
+HYSTERIA_CONFIG="/etc/hysteria/config.yaml"
+HYSTERIA_DIR="/etc/hysteria"
+HYSTERIA_SVC="hysteria-server"
+
+hy_is_installed() { command -v hysteria &>/dev/null; }
+
+hy_is_running() { systemctl is-active --quiet hysteria-server 2>/dev/null; }
+
+hy_port_is_free() {
+    local p="$1"
+    ss -tulpn 2>/dev/null | awk '{print $5}' | grep -qE ":${p}$" && return 1 || return 0
+}
+
+hy_port_label() {
+    local p="$1"
+    if hy_port_is_free "$p"; then
+        echo "свободен ✓"
+    else
+        local proc
+        proc=$(ss -tulpn 2>/dev/null | awk '{print $5,$7}' | grep ":${p} " \
+            | grep -oP 'users:\(\("\K[^"]+' | head -1 || true)
+        [ -n "$proc" ] && echo "занят ($proc) ✗" || echo "занят ✗"
+    fi
+}
+
+hy_is_valid_fqdn() {
+    local d="$1"
+    [[ "$d" == *.* ]] || return 1
+    [[ "${#d}" -le 253 ]] || return 1
+    [[ "$d" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
+}
+
+hy_get_public_ip() {
+    local ip=""
+    for url in "https://api.ipify.org" "https://ifconfig.me/ip" \
+               "https://icanhazip.com" "https://checkip.amazonaws.com"; do
+        ip="$(curl -4fsS --max-time 6 "$url" 2>/dev/null | tr -d ' \r\n' || true)"
+        [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && { echo "$ip"; return 0; }
+    done
+    return 1
+}
+
+hy_resolve_a() {
+    local domain="$1"
+    if command -v dig &>/dev/null; then
+        dig +short A "$domain" 2>/dev/null | tr -d '\r' | grep -E '^[0-9]+\.' || true
+    else
+        getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.' || true
+    fi
+}
+
+# ── Установка ─────────────────────────────────────────────────────
+hysteria_install() {
+    step "Установка Hysteria2"
+
+    # Домен
+    local domain=""
+    while true; do
+        read -rp "  Домен (например cdn.example.com): " domain < /dev/tty
+        hy_is_valid_fqdn "$domain" && break
+        warn "Некорректный домен. Нужен FQDN вида sub.example.com"
+    done
+
+    # Email
+    local email=""
+    read -rp "  Email для ACME (необязателен): " email < /dev/tty
+    email="${email// /}"
+
+    # CA
+    echo ""
+    echo -e "  ${WHITE}Центр сертификации (CA):${NC}"
+    echo "  ┌──────────────────────────────────────────────────────────────────┐"
+    echo "  │  1) Let's Encrypt  — стандарт, рекомендуется                    │"
+    echo "  │  2) ZeroSSL        — резерв если Let's Encrypt заблокирован      │"
+    echo "  │  3) Buypass        — сертификат на 180 дней вместо 90            │"
+    echo "  └──────────────────────────────────────────────────────────────────┘"
+    local ca_choice ca_name ca_label
+    while [[ ! "$ca_choice" =~ ^[123]$ ]]; do
+        read -rp "  Выбор [1]: " ca_choice < /dev/tty
+        ca_choice="${ca_choice:-1}"
+    done
+    case "$ca_choice" in
+        1) ca_name="letsencrypt"; ca_label="Let's Encrypt" ;;
+        2) ca_name="zerossl";     ca_label="ZeroSSL" ;;
+        3) ca_name="buypass";     ca_label="Buypass" ;;
+    esac
+    ok "CA: $ca_label"
+
+    # Порт
+    echo ""
+    echo -e "  ${WHITE}Выберите UDP порт:${NC}"
+    echo "  ⚠️  Порт 443 занят Xray/Reality если установлен Remnawave"
+    echo "  Проверка портов..."
+    local l8443 l2053 l2083 l2087
+    l8443=$(hy_port_label 8443); l2053=$(hy_port_label 2053)
+    l2083=$(hy_port_label 2083); l2087=$(hy_port_label 2087)
+    echo "  ┌──────────────────────────────────────────────────────────┐"
+    printf "  │  1) 8443  — рекомендуется  [%-26s]  │\n" "$l8443"
+    printf "  │  2) 2053  — альтернатива   [%-26s]  │\n" "$l2053"
+    printf "  │  3) 2083  — альтернатива   [%-26s]  │\n" "$l2083"
+    printf "  │  4) 2087  — альтернатива   [%-26s]  │\n" "$l2087"
+    echo "  │  5) Ввести свой порт                                     │"
+    echo "  └──────────────────────────────────────────────────────────┘"
+    local port_choice port
+    while [[ ! "$port_choice" =~ ^[12345]$ ]]; do
+        read -rp "  Выбор [1]: " port_choice < /dev/tty
+        port_choice="${port_choice:-1}"
+    done
+    case "$port_choice" in
+        1) port=8443 ;; 2) port=2053 ;; 3) port=2083 ;; 4) port=2087 ;;
+        5) while true; do
+               read -rp "  Порт (1-65535): " port < /dev/tty
+               [[ "$port" =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) && break
+               warn "Некорректный порт"
+           done ;;
+    esac
+    if ! hy_port_is_free "$port"; then
+        warn "Порт $port занят!"
+        local fp; read -rp "  Продолжить? (y/N): " fp < /dev/tty
+        [[ "${fp:-N}" =~ ^[yY]$ ]] || { warn "Отмена"; return 1; }
+    fi
+    ok "Порт: $port"
+
+    # Логин и пароль
+    local username pass
+    read -rp "  Логин [Admin]: " username < /dev/tty
+    username="${username:-Admin}"
+    read -rp "  Пароль (пусто = авто): " pass < /dev/tty
+    if [ -z "$pass" ]; then
+        pass=$(openssl rand -base64 24 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
+        info "Сгенерирован пароль: $pass"
+    fi
+
+    # Название подключения
+    local conn_name
+    read -rp "  Название подключения [Hysteria2]: " conn_name < /dev/tty
+    conn_name="${conn_name:-Hysteria2}"
+
+    # Masquerade
+    echo ""
+    echo -e "  ${WHITE}Режим маскировки:${NC}"
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    echo "  │  1) bing.com          — рекомендуется, поддерживает HTTP/3  │"
+    echo "  │  2) yahoo.com         — стабильный, поддерживает HTTP/3     │"
+    echo "  │  3) cdn.apple.com     — нейтральный, поддерживает HTTP/3    │"
+    echo "  │  4) speed.hetzner.de  — нейтральный, поддерживает HTTP/3    │"
+    echo "  │  5) /var/www/html     — локальная заглушка (Remnawave)      │"
+    echo "  │  6) Ввести свой URL                                          │"
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    local masq_choice masq_type masq_url
+    masq_type="proxy"; masq_url=""
+    while [[ ! "$masq_choice" =~ ^[123456]$ ]]; do
+        read -rp "  Выбор [1]: " masq_choice < /dev/tty
+        masq_choice="${masq_choice:-1}"
+    done
+    case "$masq_choice" in
+        1) masq_url="https://www.bing.com" ;;
+        2) masq_url="https://www.yahoo.com" ;;
+        3) masq_url="https://cdn.apple.com" ;;
+        4) masq_url="https://speed.hetzner.de" ;;
+        5) masq_type="file"
+           if [ ! -d /var/www/html ]; then
+               mkdir -p /var/www/html
+               cat > /var/www/html/index.html << 'HTML'
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Please wait</title><style>body{background:#080808;height:100vh;margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif}.dots{display:flex;gap:15px;margin-bottom:30px}.d{width:20px;height:20px;background:#fff;border-radius:50%;animation:b 1.4s infinite ease-in-out both}.d:nth-child(1){animation-delay:-0.32s}.d:nth-child(2){animation-delay:-0.16s}@keyframes b{0%,80%,100%{transform:scale(0);opacity:0.2}40%{transform:scale(1);opacity:1}}.t{color:#555;font-size:14px;letter-spacing:2px;font-weight:600}</style></head><body><div class="dots"><div class="d"></div><div class="d"></div><div class="d"></div></div><div class="t">RETRYING CONNECTION</div></body></html>
+HTML
+               ok "Заглушка создана: /var/www/html"
+           else
+               ok "Используется существующая /var/www/html"
+           fi ;;
+        6) while true; do
+               read -rp "  URL (https://...): " masq_url < /dev/tty
+               [[ "$masq_url" =~ ^https?:// ]] && break
+               warn "URL должен начинаться с https://"
+           done ;;
+    esac
+    [ "$masq_type" = "proxy" ] && ok "Маскировка: proxy → $masq_url" \
+                                || ok "Маскировка: file → /var/www/html"
+
+    # Алгоритм скорости
+    echo ""
+    echo -e "  ${WHITE}Алгоритм контроля скорости:${NC}"
+    echo "  [1] BBR    — стандартный, рекомендуется для стабильных каналов"
+    echo "  [2] Brutal — агрессивный, для нестабильных каналов / мобильного"
+    local speed_mode use_brutal bw_up bw_down
+    use_brutal=false
+    read -rp "  Выбор [1]: " speed_mode < /dev/tty
+    speed_mode="${speed_mode:-1}"
+    if [ "$speed_mode" = "2" ]; then
+        use_brutal=true
+        warn "Указывайте реальную скорость — Brutal создаёт до 1.4× нагрузки"
+        read -rp "  Download (Mbps) [100]: " bw_down < /dev/tty; bw_down="${bw_down:-100}"
+        read -rp "  Upload (Mbps) [50]: "   bw_up   < /dev/tty; bw_up="${bw_up:-50}"
+        ok "Brutal: ↓${bw_down} / ↑${bw_up} Mbps"
+    else
+        ok "BBR (по умолчанию)"
+    fi
+
+    # Обновление системы и зависимости
+    step "Обновление системы и установка зависимостей"
+    apt-get update -y && apt-get upgrade -y
+    apt-get install -y curl ca-certificates openssl qrencode dnsutils
+
+    # Проверка DNS
+    step "Проверка DNS"
+    local server_ip domain_ips
+    server_ip=$(hy_get_public_ip || true)
+    [ -z "$server_ip" ] && { err "Не удалось определить IP сервера"; return 1; }
+    ok "IP сервера: $server_ip"
+    domain_ips=$(hy_resolve_a "$domain" || true)
+    [ -z "$domain_ips" ] && { err "Домен $domain не резолвится. Создайте A-запись → $server_ip"; return 1; }
+    echo "  A-записи: $(echo "$domain_ips" | tr '\n' ' ')"
+    if ! echo "$domain_ips" | grep -qx "$server_ip"; then
+        warn "Домен не указывает на этот сервер!"
+        local fc; read -rp "  Продолжить принудительно? (y/N): " fc < /dev/tty
+        [[ "${fc:-N}" =~ ^[yY]$ ]] || { warn "Исправьте DNS и запустите снова"; return 1; }
+    else
+        ok "DNS корректен"
+    fi
+
+    # Установка Hysteria2
+    step "Установка Hysteria2"
+    bash <(curl -fsSL https://get.hy2.sh/)
+    command -v hysteria &>/dev/null || { err "Бинарник hysteria не найден"; return 1; }
+    ok "Hysteria2 установлен: $(command -v hysteria)"
+
+    # Конфиг
+    step "Запись конфигурации"
+    install -d -m 0755 "$HYSTERIA_DIR"
+    local acme_email_line=""
+    [ -n "$email" ] && acme_email_line="  email: ${email}"
+
+    local bw_block=""
+    $use_brutal && bw_block="
+bandwidth:
+  up: ${bw_up} mbps
+  down: ${bw_down} mbps"
+
+    local masq_block
+    if [ "$masq_type" = "file" ]; then
+        masq_block="masquerade:
+  type: file
+  file:
+    dir: /var/www/html"
+    else
+        masq_block="masquerade:
+  type: proxy
+  proxy:
+    url: ${masq_url}
+    rewriteHost: true"
+    fi
+
+    cat > "$HYSTERIA_CONFIG" << EOF
+listen: 0.0.0.0:${port}
+
+acme:
+  type: http
+  domains:
+    - ${domain}
+  ca: ${ca_name}
+${acme_email_line}
+
+auth:
+  type: userpass
+  userpass:
+    ${username}: "${pass}"
+${bw_block}
+${masq_block}
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+EOF
+    ok "Конфигурация записана: $HYSTERIA_CONFIG"
+
+    # Сервис
+    systemctl daemon-reload
+    systemctl enable --now "$HYSTERIA_SVC"
+    ok "Сервис $HYSTERIA_SVC запущен"
+
+    # UFW
+    if command -v ufw &>/dev/null; then
+        ufw allow 22/tcp        >/dev/null 2>&1
+        ufw allow "${port}/udp" >/dev/null 2>&1
+        ufw allow "${port}/tcp" >/dev/null 2>&1
+        ufw --force enable      >/dev/null 2>&1
+        ok "UFW: открыт ${port}/udp и ${port}/tcp (80/443 не трогаем)"
+    fi
+
+    # URI и файлы
+    local uri txt_file yaml_file qr_file
+    uri="hy2://${username}:${pass}@${domain}:${port}?sni=${domain}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
+    txt_file="/root/hysteria-${domain}.txt"
+    yaml_file="/root/hysteria-${domain}.yaml"
+    qr_file="/root/hysteria-${domain}.png"
+
+    echo "$uri" > "$txt_file"
+
+    cat > "$yaml_file" << EOF
+proxies:
+  - name: ${conn_name}
+    type: hysteria2
+    server: ${domain}
+    port: ${port}
+    username: ${username}
+    password: "${pass}"
+    sni: ${domain}
+    alpn:
+      - h3
+    skip-cert-verify: false
+$(${use_brutal} && echo "    up: \"${bw_up} mbps\"" && echo "    down: \"${bw_down} mbps\"")
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - ${conn_name}
+
+rules:
+  - MATCH,Proxy
+EOF
+
+    qrencode -o "$qr_file" -s 8 "$uri" 2>/dev/null && ok "QR PNG: $qr_file"
+
+    # Итог
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║          ✅  Hysteria2 установлен успешно!               ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${WHITE}Сервер:${NC}    ${domain}:${port}"
+    echo -e "  ${WHITE}Логин:${NC}     ${username}"
+    echo -e "  ${WHITE}Пароль:${NC}    ${pass}"
+    echo -e "  ${WHITE}Алгоритм:${NC}  $($use_brutal && echo "Brutal ↓${bw_down}/↑${bw_up} Mbps" || echo "BBR")"
+    echo ""
+    echo -e "  ${CYAN}URI:${NC}"
+    echo "  $uri"
+    echo ""
+    echo -e "  ${WHITE}Файлы:${NC}"
+    echo "    URI:          $txt_file"
+    echo "    Clash/Mihomo: $yaml_file"
+    echo "    QR PNG:       $qr_file"
+    echo ""
+    echo "  QR-код:"
+    qrencode -t ANSIUTF8 "$uri" 2>/dev/null || true
+    echo ""
+    echo -e "  ${YELLOW}Добавить пользователя:${NC}"
+    echo "    nano $HYSTERIA_CONFIG"
+    echo "    systemctl restart $HYSTERIA_SVC"
+}
+
+# ── Статус ────────────────────────────────────────────────────────
+hysteria_status() {
+    header "Hysteria2 — Статус"
+    if hy_is_installed; then
+        echo -e "  Версия:  $(hysteria version 2>/dev/null | head -1)"
+    fi
+    systemctl --no-pager status "$HYSTERIA_SVC" 2>/dev/null || warn "Сервис не найден"
+    if [ -f "$HYSTERIA_CONFIG" ]; then
+        echo ""
+        echo -e "  ${WHITE}Конфигурация:${NC}"
+        local dom port usr
+        dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep '- ' | head -1 | tr -d ' -' || echo "—")
+        port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "—")
+        usr=$(grep -A2 'userpass:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -v 'userpass:' | head -1 | awk -F: '{print $1}' | tr -d ' ' || echo "—")
+        echo "    Домен: $dom    Порт: $port    Пользователь: $usr"
+    fi
+}
+
+# ── Логи ──────────────────────────────────────────────────────────
+hysteria_logs() {
+    header "Hysteria2 — Логи"
+    journalctl -u "$HYSTERIA_SVC" -n 80 --no-pager 2>/dev/null || warn "Логи недоступны"
+}
+
+# ── Перезапуск ────────────────────────────────────────────────────
+hysteria_restart() {
+    systemctl restart "$HYSTERIA_SVC" && ok "Hysteria2 перезапущен" || warn "Ошибка перезапуска"
+}
+
+# ── Добавить пользователя ─────────────────────────────────────────
+hysteria_add_user() {
+    header "Hysteria2 — Добавить пользователя"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Конфиг не найден. Сначала установите Hysteria2"; return 1; }
+
+    local new_user new_pass
+    read -rp "  Имя пользователя: " new_user < /dev/tty
+    [ -z "$new_user" ] && { warn "Имя не может быть пустым"; return 1; }
+    read -rp "  Пароль (пусто = авто): " new_pass < /dev/tty
+    if [ -z "$new_pass" ]; then
+        new_pass=$(openssl rand -base64 18 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
+        info "Сгенерирован пароль: $new_pass"
+    fi
+
+    # Вставляем под userpass:
+    sed -i "/^  userpass:/a\\    ${new_user}: \"${new_pass}\"" "$HYSTERIA_CONFIG"
+    systemctl reload "$HYSTERIA_SVC" 2>/dev/null || systemctl restart "$HYSTERIA_SVC"
+    ok "Пользователь '${new_user}' добавлен"
+
+    # Генерируем URI для нового пользователя
+    local dom port conn_name uri
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep '- ' | head -1 | tr -d ' -')
+    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+    read -rp "  Название подключения [${new_user}]: " conn_name < /dev/tty
+    conn_name="${conn_name:-$new_user}"
+    uri="hy2://${new_user}:${new_pass}@${dom}:${port}?sni=${dom}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
+    echo ""
+    echo -e "  ${CYAN}URI:${NC}"
+    echo "  $uri"
+    echo ""
+    echo "  QR-код:"
+    qrencode -t ANSIUTF8 "$uri" 2>/dev/null || true
+    echo "$uri" >> "/root/hysteria-${dom}-users.txt"
+    ok "URI сохранён: /root/hysteria-${dom}-users.txt"
+}
+
+# ── Миграция ──────────────────────────────────────────────────────
+hysteria_migrate() {
+    header "Hysteria2 — Перенос на новый сервер"
+    [ -f "$HYSTERIA_CONFIG" ] || { warn "Hysteria2 не установлена на этом сервере"; return 1; }
+    ensure_sshpass
+
+    local rip rport ruser rpass
+    read -rp "  IP нового сервера: "   rip   < /dev/tty
+    read -rp "  SSH порт [22]: "       rport < /dev/tty; rport="${rport:-22}"
+    read -rp "  Пользователь [root]: " ruser < /dev/tty; ruser="${ruser:-root}"
+    read -srp "  Пароль SSH: "         rpass < /dev/tty; echo
+
+    local SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+    RUN() { sshpass -p "$rpass" ssh -p "$rport" $SSH_OPTS "${ruser}@${rip}" "$@"; }
+    PUT() { sshpass -p "$rpass" scp -P "$rport" $SSH_OPTS -r "$@"; }
+
+    info "Проверка подключения..."
+    RUN echo ok >/dev/null 2>&1 || { err "Не удалось подключиться к ${rip}:${rport}"; return 1; }
+    ok "Подключение успешно"
+
+    # Получаем домен из конфига
+    local domain hy_port
+    domain=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep '- ' | head -1 | tr -d ' -')
+    hy_port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+
+    # 1. Установка Hysteria2 на новом сервере
+    info "Установка Hysteria2 на новом сервере..."
+    RUN "bash <(curl -fsSL https://get.hy2.sh/)" || { err "Ошибка установки"; return 1; }
+    ok "Hysteria2 установлен"
+
+    # 2. Копирование конфига
+    info "Копирование конфигурации..."
+    RUN "mkdir -p /etc/hysteria"
+    PUT "$HYSTERIA_CONFIG" "${ruser}@${rip}:/etc/hysteria/config.yaml"
+    ok "Конфиг скопирован"
+
+    # 3. Копирование сертификата Let's Encrypt
+    if [ -d "/etc/letsencrypt/live/${domain}" ]; then
+        info "Копирование SSL-сертификата..."
+        RUN "mkdir -p /etc/letsencrypt"
+        PUT /etc/letsencrypt/live    "${ruser}@${rip}:/etc/letsencrypt/" 2>/dev/null || true
+        PUT /etc/letsencrypt/archive "${ruser}@${rip}:/etc/letsencrypt/" 2>/dev/null || true
+        PUT /etc/letsencrypt/renewal "${ruser}@${rip}:/etc/letsencrypt/" 2>/dev/null || true
+        ok "Сертификат скопирован (действует до истечения, затем обновится автоматически)"
+    else
+        warn "Сертификат /etc/letsencrypt/live/${domain} не найден — Hysteria переиздаст его через ACME после смены DNS"
+    fi
+
+    # 4. Открытие портов и запуск
+    info "Открытие портов и запуск сервиса..."
+    RUN bash << REMOTE
+ufw allow 22/tcp  >/dev/null 2>&1 || true
+ufw allow ${hy_port}/udp >/dev/null 2>&1 || true
+ufw allow ${hy_port}/tcp >/dev/null 2>&1 || true
+ufw --force enable >/dev/null 2>&1 || true
+apt-get install -y qrencode >/dev/null 2>&1 || true
+systemctl daemon-reload
+systemctl enable --now hysteria-server
+REMOTE
+    ok "Сервис запущен на новом сервере"
+
+    # 5. Копирование URI-файлов
+    PUT /root/hysteria-${domain}*.txt  "${ruser}@${rip}:/root/" 2>/dev/null || true
+    PUT /root/hysteria-${domain}*.yaml "${ruser}@${rip}:/root/" 2>/dev/null || true
+
+    # 6. Копирование этого скрипта
+    local script_path; script_path=$(realpath "$0" 2>/dev/null || echo "/root/setup.sh")
+    PUT "$script_path" "${ruser}@${rip}:${script_path}" 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║        ✅  Перенос Hysteria2 завершён                    ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Следующие шаги:${NC}"
+    echo ""
+    echo -e "  ${WHITE}1. Обновите DNS A-запись:${NC}"
+    echo -e "     ${CYAN}${domain}${NC}  →  ${WHITE}${rip}${NC}"
+    echo ""
+    echo -e "  ${WHITE}2. После обновления DNS сертификат обновится автоматически.${NC}"
+    echo ""
+    echo -e "  ${WHITE}3. Проверьте работу на новом сервере, затем остановите старый:${NC}"
+    echo -e "     ${CYAN}systemctl stop hysteria-server${NC}"
+    echo ""
+
+    # ── Мониторинг DNS и автоматический перезапуск ────────────────
+    local wait_dns
+    read -rp "  Ждать обновления DNS и автоматически перезапустить сервис? (y/N): " wait_dns < /dev/tty
+    if [[ "${wait_dns:-N}" =~ ^[yY]$ ]]; then
+        echo ""
+        info "Мониторинг DNS: ожидаем когда ${domain} → ${rip}"
+        info "Проверка каждые 30 секунд. Ctrl+C для отмены."
+        echo ""
+
+        local attempt=0 max_attempts=120  # максимум 60 минут
+        local resolved_ip=""
+
+        while true; do
+            attempt=$((attempt + 1))
+            resolved_ip=$(dig +short A "$domain" 2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)
+
+            printf "  [%3d] %s → %s" "$attempt" "$domain" "${resolved_ip:-не резолвится}"
+
+            if [ "$resolved_ip" = "$rip" ]; then
+                echo ""
+                echo ""
+                ok "DNS обновлён: ${domain} → ${rip}"
+                echo ""
+                info "Перезапускаем hysteria-server на новом сервере..."
+                if RUN "systemctl restart hysteria-server" 2>/dev/null; then
+                    ok "Сервис перезапущен — ACME переиздаст сертификат автоматически"
+                    echo ""
+                    info "Проверка статуса через 10 секунд..."
+                    sleep 10
+                    local svc_status
+                    svc_status=$(RUN "systemctl is-active hysteria-server" 2>/dev/null || echo "unknown")
+                    if [ "$svc_status" = "active" ]; then
+                        ok "hysteria-server активен ✓"
+                    else
+                        warn "Сервис не запустился. Проверьте логи:"
+                        echo -e "     ${CYAN}ssh ${ruser}@${rip} journalctl -u hysteria-server -n 30${NC}"
+                    fi
+                else
+                    warn "Не удалось перезапустить сервис. Перезапустите вручную:"
+                    echo -e "     ${CYAN}ssh ${ruser}@${rip} systemctl restart hysteria-server${NC}"
+                fi
+                echo ""
+                echo -e "  ${YELLOW}Убедитесь что всё работает, затем остановите старый сервер:${NC}"
+                echo -e "     ${CYAN}systemctl stop hysteria-server${NC}"
+                echo ""
+                break
+            else
+                # Показываем прогресс-бар ожидания 30 секунд
+                printf " — ожидание"
+                for i in $(seq 1 6); do
+                    sleep 5
+                    printf "."
+                done
+                printf "
+[K"
+            fi
+
+            if [ "$attempt" -ge "$max_attempts" ]; then
+                echo ""
+                warn "Таймаут 60 минут. DNS так и не обновился."
+                warn "Обновите DNS вручную и перезапустите сервис:"
+                echo -e "     ${CYAN}ssh ${ruser}@${rip} systemctl restart hysteria-server${NC}"
+                break
+            fi
+        done
+    fi
+}
+
+# ── Подменю Hysteria2 ─────────────────────────────────────────────
+hysteria_menu() {
+    header "Hysteria2"
+    local inst_status
+    if hy_is_running; then
+        inst_status="${GREEN}● запущена${NC}"
+    elif hy_is_installed; then
+        inst_status="${YELLOW}◐ остановлена${NC}"
+    else
+        inst_status="${GRAY}○ не установлена${NC}"
+    fi
+    echo -e "  Hysteria2: $(echo -e "$inst_status")"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} Установить"
+    echo -e "  ${BOLD}2)${RESET} Статус"
+    echo -e "  ${BOLD}3)${RESET} Логи"
+    echo -e "  ${BOLD}4)${RESET} Перезапустить"
+    echo -e "  ${BOLD}5)${RESET} Добавить пользователя"
+    echo -e "  ${BOLD}6)${RESET} Перенести на другой сервер"
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) hysteria_install ;;
+        2) hysteria_status; read -rp "Enter..." < /dev/tty ;;
+        3) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
+        4) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
+        5) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
+        6) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    hysteria_menu
+}
+
+
+migrate_menu() {
+    header "Перенос сервисов"
+    echo -e "  ${BOLD}1)${RESET} Перенести Remnawave Panel"
+    echo -e "  ${BOLD}2)${RESET} Перенести MTProxy (telemt, только systemd)"
+    echo -e "  ${BOLD}3)${RESET} Перенести всё (Panel + MTProxy)"
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch
+    case "$ch" in
+        1)  if [ -x "$PANEL_MGMT_SCRIPT" ]; then
+                "$PANEL_MGMT_SCRIPT" migrate
+            else
+                warn "Panel не установлена или скрипт управления отсутствует"
+            fi ;;
+        2)  [ -z "$TELEMT_MODE" ] && { TELEMT_MODE="systemd"; TELEMT_CONFIG_FILE="$TELEMT_CONFIG_SYSTEMD"; TELEMT_WORK_DIR="$TELEMT_WORK_DIR_SYSTEMD"; }
+            telemt_menu_migrate ;;
+        3)  check_root; migrate_all ;;
+        0)  return ;;
+        *)  warn "Неверный выбор" ;;
+    esac
+    migrate_menu
+}
+
+
+# Update migrate_menu to include Hysteria
+migrate_menu() {
+    header "Перенос сервисов"
+    echo -e "  ${BOLD}1)${RESET} Перенести Remnawave Panel"
+    echo -e "  ${BOLD}2)${RESET} Перенести MTProxy (telemt, только systemd)"
+    echo -e "  ${BOLD}3)${RESET} Перенести Hysteria2"
+    echo -e "  ${BOLD}4)${RESET} Перенести всё (Panel + MTProxy + Hysteria2)"
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch
+    case "$ch" in
+        1)  if [ -x "$PANEL_MGMT_SCRIPT" ]; then
+                "$PANEL_MGMT_SCRIPT" migrate
+            else
+                warn "Panel не установлена или скрипт управления отсутствует"
+            fi ;;
+        2)  [ -z "$TELEMT_MODE" ] && { TELEMT_MODE="systemd"; TELEMT_CONFIG_FILE="$TELEMT_CONFIG_SYSTEMD"; TELEMT_WORK_DIR="$TELEMT_WORK_DIR_SYSTEMD"; }
+            telemt_menu_migrate ;;
+        3)  hysteria_migrate ;;
+        4)  check_root; migrate_all; hysteria_migrate ;;
+        0)  return ;;
+        *)  warn "Неверный выбор" ;;
+    esac
+    migrate_menu
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# ГЛАВНОЕ МЕНЮ
+# ═══════════════════════════════════════════════════════════════════
+
+main_menu() {
+    clear
+    echo -e "${PURPLE}"
+    echo "  ╔══════════════════════════════════════════════════════════╗"
+    echo "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
+    echo "  ╚══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    # Быстрый статус
+    local panel_status telemt_status hysteria_status
+    if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
+        panel_status="${GREEN}● установлена${NC}"
+    elif [ -d /opt/remnawave ]; then
+        panel_status="${YELLOW}◐ остановлена${NC}"
+    else
+        panel_status="${GRAY}○ не установлена${NC}"
+    fi
+
+    if systemctl is-active --quiet telemt 2>/dev/null; then
+        telemt_status="${GREEN}● запущен (systemd)${NC}"
+    elif { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^telemt$"; then
+        telemt_status="${GREEN}● запущен (Docker)${NC}"
+    elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
+        telemt_status="${YELLOW}◐ остановлен${NC}"
+    else
+        telemt_status="${GRAY}○ не установлен${NC}"
+    fi
+
+    if hy_is_running 2>/dev/null; then
+        hysteria_status="${GREEN}● запущена${NC}"
+    elif hy_is_installed 2>/dev/null; then
+        hysteria_status="${YELLOW}◐ остановлена${NC}"
+    else
+        hysteria_status="${GRAY}○ не установлена${NC}"
+    fi
+
+    echo -e "  ${WHITE}Remnawave Panel:${NC}  $(echo -e "$panel_status")"
+    echo -e "  ${WHITE}MTProxy (telemt):${NC} $(echo -e "$telemt_status")"
+    echo -e "  ${WHITE}Hysteria2:${NC}        $(echo -e "$hysteria_status")"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} 🛡️  Remnawave Panel"
+    echo -e "  ${BOLD}2)${RESET} 📡  MTProxy (telemt)"
+    echo -e "  ${BOLD}3)${RESET} 🚀  Hysteria2"
+    echo -e "  ${BOLD}4)${RESET} 📦  Перенос"
+    echo -e "  ${BOLD}0)${RESET} Выход"
+    echo ""
+    local ch; read -rp "Выбор: " ch
+    case "$ch" in
+        1) panel_menu ;;
+        2) telemt_section ;;
+        3) hysteria_menu ;;
+        4) migrate_menu ;;
+        0) exit 0 ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    main_menu
+}
+
+# ─── Точка входа ───────────────────────────────────────────────────
+check_root
+main_menu
