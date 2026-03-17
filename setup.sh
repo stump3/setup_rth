@@ -2334,8 +2334,43 @@ hysteria_add_user() {
     local dom port conn_name uri
     dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
     port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
-    read -rp "  Название подключения [${new_user}]: " conn_name < /dev/tty
-    conn_name="${conn_name:-$new_user}"
+
+    # Собираем существующие названия из URI-файла
+    local users_file="/root/hysteria-${dom}-users.txt"
+    local main_file="/root/hysteria-${dom}.txt"
+    local -a existing_names=()
+    for f in "$users_file" "$main_file"; do
+        [ -f "$f" ] || continue
+        while IFS= read -r line; do
+            local n; n=$(echo "$line" | grep -oP '#\K.+$')
+            [ -n "$n" ] && existing_names+=("$n")
+        done < "$f"
+    done
+    # Убираем дубликаты
+    local -a unique_names=()
+    for n in "${existing_names[@]}"; do
+        local found=0
+        for u in "${unique_names[@]}"; do [ "$u" = "$n" ] && found=1 && break; done
+        [ $found -eq 0 ] && unique_names+=("$n")
+    done
+
+    echo ""
+    echo -e "  ${WHITE}Название подключения:${NC}"
+    local i=1
+    for n in "${unique_names[@]}"; do
+        echo -e "  ${BOLD}${i})${RESET} ${n}"
+        i=$((i+1))
+    done
+    echo -e "  ${BOLD}${i})${RESET} Ввести новое название"
+    echo ""
+    local ch; read -rp "  Выбор [${i}]: " ch < /dev/tty
+    ch="${ch:-$i}"
+    if [[ "$ch" =~ ^[0-9]+$ ]] && [ "$ch" -ge 1 ] && [ "$ch" -lt "$i" ]; then
+        conn_name="${unique_names[$((ch-1))]}"
+    else
+        read -rp "  Новое название [${new_user}]: " conn_name < /dev/tty
+        conn_name="${conn_name:-$new_user}"
+    fi
     uri="hy2://${new_user}:${new_pass}@${dom}:${port}?sni=${dom}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
     echo ""
     echo -e "  ${CYAN}URI:${NC}"
