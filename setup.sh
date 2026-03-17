@@ -65,7 +65,7 @@ ask() {
     export "$var"
 }
 
-check_root()    { [ "$EUID" -ne 0 ] && err "Запустите от root: sudo bash $0"; }
+check_root()    { [ "$EUID" -ne 0 ] && err "Запустите от root: sudo bash $0" || true; }
 need_root()     { [ "$(id -u)" -eq 0 ] || die "Эта операция требует прав root."; }
 gen_secret()    { openssl rand -hex 16; }
 gen_hex64()     { openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64; }
@@ -1189,10 +1189,13 @@ telemt_choose_mode() {
     echo ""
     echo -e "  ${BOLD}2)${RESET} ${BOLD}Docker${RESET} — образ с Docker Hub"
     echo ""
+    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo ""
     read -rp "Выбор [1/2]: " ch
     case "$ch" in
         1) TELEMT_MODE="systemd"; TELEMT_CONFIG_FILE="$TELEMT_CONFIG_SYSTEMD"; TELEMT_WORK_DIR="$TELEMT_WORK_DIR_SYSTEMD" ;;
         2) TELEMT_MODE="docker";  TELEMT_CONFIG_FILE="$TELEMT_CONFIG_DOCKER";  TELEMT_WORK_DIR="$TELEMT_WORK_DIR_DOCKER" ;;
+        0) return 1 ;;
         *) warn "Неверный выбор"; telemt_choose_mode ;;
     esac
     success "Режим: $TELEMT_MODE"
@@ -1689,7 +1692,16 @@ telemt_main_menu() {
 }
 
 telemt_section() {
-    [ -z "$TELEMT_MODE" ] && telemt_choose_mode
+    if [ -z "$TELEMT_MODE" ]; then
+        # Автоопределение если уже установлен
+        if systemctl is-active --quiet telemt 2>/dev/null || systemctl is-enabled --quiet telemt 2>/dev/null; then
+            TELEMT_MODE="systemd"; TELEMT_CONFIG_FILE="$TELEMT_CONFIG_SYSTEMD"; TELEMT_WORK_DIR="$TELEMT_WORK_DIR_SYSTEMD"
+        elif { docker ps --format "{{.Names}}" 2>/dev/null || true; } | grep -q "^telemt$"; then
+            TELEMT_MODE="docker"; TELEMT_CONFIG_FILE="$TELEMT_CONFIG_DOCKER"; TELEMT_WORK_DIR="$TELEMT_WORK_DIR_DOCKER"
+        else
+            telemt_choose_mode || return
+        fi
+    fi
     telemt_check_deps
     telemt_main_menu
 }
@@ -1776,11 +1788,10 @@ RPANEL
         local ub; ub=$(awk '/^\[access\.users\]/{f=1;next} f&&/^\[/{exit} f&&/=/{print}' "$TELEMT_CONFIG_SYSTEMD")
         local lb; lb=$(awk '/^\[access\.user_limits\./{f=1} f{print}' "$TELEMT_CONFIG_SYSTEMD" || true)
 
-        local telemt_conf
-        telemt_conf=$(cat << 'NCONF'
+        echo "$ub" | RUN "mkdir -p /etc/telemt && { cat <<NCONF
 [general]
 use_middle_proxy = true
-log_level = "normal"
+log_level = \"normal\"
 
 [general.modes]
 classic = false
@@ -1788,13 +1799,10 @@ secure  = false
 tls     = true
 
 [general.links]
-show = "*"
+show = \"*\"
 
 [server]
-NCONF
-)
-        telemt_conf="${telemt_conf}
-port = ${cp}
+port = $cp
 
 [server.api]
 enabled   = true
@@ -1805,14 +1813,14 @@ whitelist = [\"127.0.0.1/32\"]
 ip = \"0.0.0.0\"
 
 [censorship]
-tls_domain    = \"${dp}\"
+tls_domain    = \"$dp\"
 mask          = true
 tls_emulation = true
 tls_front_dir = \"/opt/telemt/tlsfront\"
 
 [access.users]
-${ub}"
-        printf '%s\n' "$telemt_conf" | RUN "mkdir -p /etc/telemt && cat > /etc/telemt/telemt.toml"
+NCONF
+cat; } > /etc/telemt/telemt.toml"
 
         [ -n "$lb" ] && echo "$lb" | RUN "echo '' >> /etc/telemt/telemt.toml && cat >> /etc/telemt/telemt.toml"
 
