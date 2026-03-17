@@ -2574,7 +2574,20 @@ hysteria_show_links() {
     local pass
     pass=$(grep -E "^    ${selected}:" "$HYSTERIA_CONFIG" | sed 's/.*: "//' | tr -d '"')
 
-    local conn_name="$selected"
+    # Ищем сохранённое название из URI-файлов
+    local conn_name=""
+    for f in "/root/hysteria-${dom}-users.txt" "/root/hysteria-${dom}.txt"; do
+        [ -f "$f" ] || continue
+        local found_name
+        found_name=$(grep "hy2://${selected}:" "$f" 2>/dev/null | grep -oP '#\K.+$' | tail -1)
+        if [ -n "$found_name" ]; then
+            conn_name="$found_name"
+            break
+        fi
+    done
+    # Если не нашли — используем имя пользователя
+    conn_name="${conn_name:-$selected}"
+
     local uri="hy2://${selected}:${pass}@${dom}:${port}?sni=${dom}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
 
     echo ""
