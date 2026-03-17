@@ -1953,7 +1953,7 @@ hysteria_install() {
     echo "  │  2) ZeroSSL        — резерв если Let's Encrypt заблокирован      │"
     echo "  │  3) Buypass        — сертификат на 180 дней вместо 90            │"
     echo "  └──────────────────────────────────────────────────────────────────┘"
-    local ca_choice ca_name ca_label
+    local ca_choice="" ca_name ca_label
     while [[ ! "$ca_choice" =~ ^[123]$ ]]; do
         read -rp "  Выбор [1]: " ca_choice < /dev/tty
         ca_choice="${ca_choice:-1}"
@@ -1980,7 +1980,7 @@ hysteria_install() {
     printf "  │  4) 2087  — альтернатива   [%-26s]  │\n" "$l2087"
     echo "  │  5) Ввести свой порт                                     │"
     echo "  └──────────────────────────────────────────────────────────┘"
-    local port_choice port
+    local port_choice="" port
     while [[ ! "$port_choice" =~ ^[12345]$ ]]; do
         read -rp "  Выбор [1]: " port_choice < /dev/tty
         port_choice="${port_choice:-1}"
