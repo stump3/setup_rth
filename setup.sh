@@ -3340,7 +3340,7 @@ main_menu() {
     echo -e "${PURPLE}"
     echo "  ╔══════════════════════════════════════════════════════════╗"
     echo "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
-    echo "  ║                                          ${GRAY}${SCRIPT_VERSION}${NC}  ║"
+    echo -e "  ║                                          ${GRAY}${SCRIPT_VERSION}${NC}  ║"
     echo "  ╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
