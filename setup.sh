@@ -5,12 +5,15 @@
 # ║  Компоненты:                                                     ║
 # ║  • Remnawave Panel  — VPN-панель (eGames архитектура)            ║
 # ║  • MTProxy (telemt) — Telegram MTProto прокси (Rust)             ║
+# ║  • Hysteria2        — высокоскоростной VPN (QUIC/UDP)            ║
 # ║                                                                  ║
-# ║  Использование:                                                  ║
-# ║    bash setup.sh                                                 ║
+# ║  Версия: v2603.172335              build: 2026-03-17 23:35 UTC  ║
+# ║  Использование: bash setup.sh                                    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+
+SCRIPT_VERSION="v2603.172335"  # build: 2026-03-17 23:35 UTC
 
 # ═══════════════════════════════════════════════════════════════════
 # ЦВЕТА И ОБЩИЕ УТИЛИТЫ
@@ -2762,7 +2765,7 @@ hysteria_show_links() {
     for f in "/root/hysteria-${dom}-users.txt" "/root/hysteria-${dom}.txt"; do
         [ -f "$f" ] || continue
         local found_name
-        found_name=$(grep -a "hy2://${selected}:" "$f" 2>/dev/null | sed 's/.*#//' | tail -1)
+        found_name=$(grep -a "hy2://${selected}:" "$f" 2>/dev/null | sed 's/.*#//' | tail -1 || true)
         if [ -n "$found_name" ]; then
             conn_name="$found_name"
             break
@@ -3337,6 +3340,7 @@ main_menu() {
     echo -e "${PURPLE}"
     echo "  ╔══════════════════════════════════════════════════════════╗"
     echo "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
+    echo "  ║                                          ${GRAY}${SCRIPT_VERSION}${NC}  ║"
     echo "  ╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
