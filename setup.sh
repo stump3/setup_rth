@@ -1155,7 +1155,7 @@ panel_menu() {
     read -rp "Выбор: " ch
     case "$ch" in
         1) panel_install ;;
-        2) [ -x "$PANEL_MGMT_SCRIPT" ] && exec "$PANEL_MGMT_SCRIPT" \
+        2) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT" \
             || warn "Панель не установлена. Сначала выполните установку." ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
