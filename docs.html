@@ -802,6 +802,21 @@ rp migrate             <span class="comment"># перенос на другой 
 
       <p>Высокоскоростной VPN-протокол поверх QUIC/UDP. Особенно эффективен на нестабильных каналах и при высоких потерях пакетов.</p>
 
+      <h3>Подменю</h3>
+      <div class="menu-preview">
+        <div class="menu-bar"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#10b981"></span><div class="title">Hysteria2</div></div>
+        <div class="menu-content">
+          <div>  <span class="mb">1)</span> Установить</div>
+          <div>  <span class="mb">2)</span> Статус</div>
+          <div>  <span class="mb">3)</span> Логи</div>
+          <div>  <span class="mb">4)</span> Перезапустить</div>
+          <div>  <span class="mb">5)</span> Добавить пользователя</div>
+          <div>  <span class="mb">6)</span> Пользователи и ссылки</div>
+          <div>  <span class="mb">7)</span> Перенести на другой сервер</div>
+          <div>  <span class="mb">0)</span> Назад</div>
+        </div>
+      </div>
+
       <h3>Требования перед установкой</h3>
       <div class="alert alert-warn">
         <span class="alert-icon">⚠️</span>
@@ -841,6 +856,18 @@ rp migrate             <span class="comment"># перенос на другой 
           </tbody>
         </table>
       </div>
+
+      <h3>Добавить пользователя</h3>
+      <p>При добавлении нового пользователя скрипт:</p>
+      <ul style="color:var(--text2);padding-left:20px;margin-bottom:16px;line-height:2">
+        <li>Показывает список уже существующих пользователей</li>
+        <li>Если имя занято — предлагает ввести другое, заменить пароль или отменить</li>
+        <li>Предлагает выбрать название подключения из уже использованных или ввести новое</li>
+        <li>Генерирует URI и QR-код</li>
+      </ul>
+
+      <h3>Пользователи и ссылки</h3>
+      <p>Пункт <code>6) Пользователи и ссылки</code> показывает всех пользователей из конфига. Выберите нужного — получите URI и QR-код повторно без необходимости переустанавливать или пересоздавать пользователя.</p>
 
       <h3>Выбор CA</h3>
       <div class="table-wrap">
@@ -884,7 +911,7 @@ rp migrate             <span class="comment"># перенос на другой 
       <p>Скрипт сохраняет URI и конфиги в <code>/root/</code>:</p>
       <div class="code-block">
         <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">uri</span></div>
-        <pre><code>hy2://Admin:Pass@cdn.example.com:8443?sni=cdn.example.com&alpn=h3&insecure=0#Germany Hysteria2</code></pre>
+        <pre><code>hy2://Admin:<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="88d8e9fbfbc8ebece6a6edf0e9e5f8e4eda6ebe7e5">[email&#160;protected]</a>:8443?sni=cdn.example.com&alpn=h3&insecure=0#Germany Hysteria2</code></pre>
       </div>
     </section>
 
@@ -1107,7 +1134,7 @@ ssh root@NEW_IP systemctl restart hysteria-server</code></pre>
             <tr><td>ОС</td><td>Ubuntu 22.04 / 24.04, Debian 11 / 12</td></tr>
             <tr><td>Права</td><td>root</td></tr>
             <tr><td>Hysteria2: домен</td><td>Отдельный от Panel и MTProxy, A-запись на IP сервера</td></tr>
-            <tr><td>Hysteria2: порт 80</td><td>Скрипт открывает автоматически для ACME и закрывает после</td></tr>
+            <tr><td>Hysteria2: порт 80</td><td>Скрипт открывает <strong>автоматически</strong> перед получением сертификата и закрывает после</td></tr>
             <tr><td>Panel: порт 443</td><td>Свободен до установки</td></tr>
             <tr><td>MTProxy: порт</td><td>8443 или другой из списка Telegram</td></tr>
           </tbody>
@@ -1118,7 +1145,7 @@ ssh root@NEW_IP systemctl restart hysteria-server</code></pre>
   </main>
 </div>
 
-<script>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
   // Active nav highlight
   const sections = document.querySelectorAll('.section');
   const navLinks = document.querySelectorAll('.nav-link');
@@ -1127,14 +1154,4 @@ ssh root@NEW_IP systemctl restart hysteria-server</code></pre>
     entries.forEach(entry => {
       if (entry.isIntersecting) {
         navLinks.forEach(l => l.classList.remove('active'));
-        const active = document.querySelector(`.nav-link[href="#${entry.target.id}"]`);
-        if (active) active.classList.add('active');
-      }
-    });
-  }, { rootMargin: '-20% 0px -70% 0px' });
-
-  sections.forEach(s => observer.observe(s));
-</script>
-
-</body>
-</html>
+        const active = document.querySelec
