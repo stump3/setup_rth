@@ -2539,9 +2539,7 @@ hysteria_show_links() {
     local pass
     pass=$(grep -E "^    ${selected}:" "$HYSTERIA_CONFIG" | sed 's/.*: "//' | tr -d '"')
 
-    read -rp "  Название подключения [${selected}]: " conn_name < /dev/tty
-    conn_name="${conn_name:-$selected}"
-
+    local conn_name="$selected"
     local uri="hy2://${selected}:${pass}@${dom}:${port}?sni=${dom}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
 
     echo ""
