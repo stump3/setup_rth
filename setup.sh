@@ -2260,7 +2260,7 @@ hysteria_status() {
         echo ""
         echo -e "  ${WHITE}Конфигурация:${NC}"
         local dom port usr
-        dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep '- ' | head -1 | tr -d ' -' || echo "—")
+        dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -- '- ' | head -1 | tr -d ' -' || echo "—")
         port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "—")
         usr=$(grep -A2 'userpass:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -v 'userpass:' | head -1 | awk -F: '{print $1}' | tr -d ' ' || echo "—")
         echo "    Домен: $dom    Порт: $port    Пользователь: $usr"
@@ -2299,7 +2299,7 @@ hysteria_add_user() {
 
     # Генерируем URI для нового пользователя
     local dom port conn_name uri
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep '- ' | head -1 | tr -d ' -')
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
     port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
     read -rp "  Название подключения [${new_user}]: " conn_name < /dev/tty
     conn_name="${conn_name:-$new_user}"
@@ -2336,7 +2336,7 @@ hysteria_migrate() {
 
     # Получаем домен из конфига
     local domain hy_port
-    domain=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep '- ' | head -1 | tr -d ' -')
+    domain=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
     hy_port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
 
     # 1. Установка Hysteria2 на новом сервере
