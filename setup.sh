@@ -2026,7 +2026,7 @@ hysteria_install() {
     echo "  │  5) /var/www/html     — локальная заглушка (Remnawave)      │"
     echo "  │  6) Ввести свой URL                                          │"
     echo "  └─────────────────────────────────────────────────────────────┘"
-    local masq_choice masq_type masq_url
+    local masq_choice="" masq_type masq_url
     masq_type="proxy"; masq_url=""
     while [[ ! "$masq_choice" =~ ^[123456]$ ]]; do
         read -rp "  Выбор [1]: " masq_choice < /dev/tty
