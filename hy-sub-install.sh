@@ -1,287 +1,230 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║  Hysteria2 → Remnawave Subscription Integration                 ║
+# ║  SERVER-MANAGER — Hysteria2 ↔ Remnawave Subscription Sync       ║
+# ║                                                                  ║
 # ║  Устанавливает:                                                  ║
 # ║  1. hy-webhook  — синхронизация пользователей через вебхук      ║
-# ║  2. Форк subscription-page — добавляет Hysteria2 URI в подписку ║
+# ║  2. Форк subscription-page — Hysteria2 URI в подписке            ║
 # ╚══════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; WHITE='\033[1;37m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+CYAN='\033[0;36m'; WHITE='\033[1;37m'; GRAY='\033[0;90m'; BOLD='\033[1m'; NC='\033[0m'
 
-STEP_CURRENT=0
-STEP_TOTAL=6
+ok()   { echo -e "${GREEN}✅ $*${NC}"; }
+info() { echo -e "${CYAN}ℹ  $*${NC}"; }
+warn() { echo -e "${YELLOW}⚠  $*${NC}"; }
+err()  { echo -e "${RED}✗  $*${NC}"; exit 1; }
 
-ok()     { echo -e "${GREEN}  ✓ $*${NC}"; }
-info()   { echo -e "${DIM}    $*${NC}"; }
-warn()   { echo -e "${YELLOW}  ⚠  $*${NC}"; }
-err()    { echo -e "\n${RED}  ✗  $*${NC}\n"; exit 1; }
-detail() { echo -e "${DIM}    → $*${NC}"; }   # авто-определённое значение
+STEP_NUM=0
+TOTAL_STEPS=7
 
 step() {
-    STEP_CURRENT=$((STEP_CURRENT + 1))
+    STEP_NUM=$((STEP_NUM + 1))
     echo ""
-    echo -e "${BOLD}${CYAN}━━━ [${STEP_CURRENT}/${STEP_TOTAL}] $* ━━━${NC}"
+    echo -e "${BOLD}${CYAN}━━━ [${STEP_NUM}/${TOTAL_STEPS}] $* ━━━${NC}"
     echo ""
 }
 
-# Статус с пометкой источника (auto/manual)
-cfg_auto()   { echo -e "${GREEN}  ✓ ${WHITE}$1${NC}${DIM} = $2  (авто)${NC}"; }
-cfg_manual() { echo -e "${YELLOW}  ✎ ${WHITE}$1${NC}${DIM} = $2  (вручную)${NC}"; }
-cfg_gen()    { echo -e "${CYAN}  ⚙ ${WHITE}$1${NC}${DIM} = $2  (сгенерировано)${NC}"; }
+# ── Очистка при ошибке ────────────────────────────────────────────
+cleanup() {
+    echo -e "${RED}✗ Ошибка на строке $LINENO — установка прервана${NC}"
+    rm -rf /opt/hy-subpage /tmp/hy_patch_*.py 2>/dev/null || true
+    systemctl is-active --quiet hy-webhook 2>/dev/null || \
+        systemctl stop hy-webhook 2>/dev/null || true
+    exit 1
+}
+trap cleanup ERR
 
+# ── Проверки ──────────────────────────────────────────────────────
 [ "$(id -u)" -ne 0 ] && err "Запустите от root"
-[ -d /opt/remnawave ] || err "Remnawave не установлена"
+[ -d /opt/remnawave ]            || err "Remnawave не установлена"
 [ -f /etc/hysteria/config.yaml ] || err "Hysteria2 не установлена"
 
-# ── Режим: установка или переустановка ───────────────────────────
-IS_INSTALLED=false
-[ -f /etc/systemd/system/hy-webhook.service ] && IS_INSTALLED=true
+# ── Идемпотентность ───────────────────────────────────────────────
+DO_WEBHOOK=true
+DO_SUBPAGE=true
+TOTAL_STEPS=6
 
-if $IS_INSTALLED; then
-    # Читаем текущий secret из сервиса
-    EXISTING_SECRET=$(grep "^Environment=WEBHOOK_SECRET=" /etc/systemd/system/hy-webhook.service         | cut -d= -f3 || echo "")
-
+if systemctl is-active --quiet hy-webhook 2>/dev/null && \
+   docker ps --format '{{.Image}}' 2>/dev/null | grep -q 'remnawave-sub-hy:local'; then
     echo ""
-    echo -e "${BOLD}${YELLOW}  ↻  Обнаружена существующая установка${NC}"
+    echo -e "  ${YELLOW}●${NC} ${BOLD}Интеграция уже установлена${NC}"
     echo ""
-    echo -e "  ${DIM}hy-webhook:        ${NC}$(systemctl is-active hy-webhook 2>/dev/null || echo inactive)"
-    echo -e "  ${DIM}Пользователей в БД:${NC} $(python3 -c "import json; d=json.load(open('/var/lib/hy-webhook/users.json')); print(len(d))" 2>/dev/null || echo "?")"
+    echo -e "  ${BOLD}1)${NC} Переустановить полностью"
+    echo -e "       ${GRAY}webhook + форк subscription-page${NC}"
+    echo -e "  ${BOLD}2)${NC} Обновить форк subscription-page"
+    echo -e "       ${GRAY}пересобрать Docker образ с новыми патчами${NC}"
+    echo -e "  ${BOLD}3)${NC} Обновить hy-webhook"
+    echo -e "       ${GRAY}заменить скрипт синхронизации${NC}"
+    echo -e "  ${BOLD}0)${NC} ${GRAY}Отмена${NC}"
     echo ""
-    echo -e "${BOLD}${WHITE}  Что обновить?${NC}"
-    echo ""
-    echo -e "  1) Всё заново          ${DIM}— полная переустановка, новый secret${NC}"
-    echo -e "  2) Только webhook      ${DIM}— сервис + конфиг, secret сохранится${NC}"
-    echo -e "  3) Только subscription ${DIM}— пересборка Docker-образа форка${NC}"
-    echo -e "  0) Отмена"
-    echo ""
-    read -rp "  Выбор [0-3]: " REINSTALL_MODE < /dev/tty
-
-    case "$REINSTALL_MODE" in
-        1)
-            echo ""
-            echo -e "  ${YELLOW}Будет выполнено:${NC} полная переустановка, новый webhook secret"
-            echo -e "  ${DIM}Затронуто: hy-webhook.service, config.yaml, docker-compose.yml${NC}"
-            echo ""
-            read -rp "  Продолжить? [y/N]: " _confirm < /dev/tty
-            [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
-            STEP_TOTAL=6
-            ;;
-        2)
-            echo ""
-            echo -e "  ${YELLOW}Будет выполнено:${NC} обновление hy-webhook, secret сохраняется"
-            echo -e "  ${DIM}Затронуто: hy-webhook.py, hy-webhook.service${NC}"
-            echo -e "  ${DIM}Не затронуто: docker-compose.yml, subscription-page${NC}"
-            echo ""
-            read -rp "  Продолжить? [y/N]: " _confirm < /dev/tty
-            [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
-            WEBHOOK_SECRET="${EXISTING_SECRET}"
-            STEP_TOTAL=3
-            ;;
-        3)
-            echo ""
-            echo -e "  ${YELLOW}Будет выполнено:${NC} пересборка и перезапуск subscription-page"
-            echo -e "  ${DIM}Затронуто: Docker-образ, docker-compose.yml${NC}"
-            echo -e "  ${DIM}Не затронуто: hy-webhook, пользователи${NC}"
-            echo ""
-            read -rp "  Продолжить? [y/N]: " _confirm < /dev/tty
-            [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
-            STEP_TOTAL=2
-            ;;
-        0|"")
-            echo "Отменено."
-            exit 0
-            ;;
-        *)
-            err "Неверный выбор"
-            ;;
+    read -rp "  Выбор: " reinstall_ch < /dev/tty
+    case "$reinstall_ch" in
+        1) info "Переустановка полностью..." ;;
+        2) DO_WEBHOOK=false; TOTAL_STEPS=5 ;;
+        3) DO_SUBPAGE=false; TOTAL_STEPS=4 ;;
+        0) exit 0 ;;
+        *) err "Неверный выбор" ;;
     esac
 fi
 
-# ── Читаем параметры ─────────────────────────────────────────────
+# ── Параметры ─────────────────────────────────────────────────────
 step "Конфигурация"
 
-# Hysteria домен из конфига
 HY_DOMAIN=$(grep -A2 'domains:' /etc/hysteria/config.yaml | grep -- '- ' | head -1 | tr -d ' -')
-HY_PORT=$(grep '^listen:' /etc/hysteria/config.yaml | grep -oE '[0-9]+$')
+LISTEN_LINE=$(grep '^listen:' /etc/hysteria/config.yaml | head -1)
+SUB_DOMAIN=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"' | cut -d'/' -f1)
 
+# Парсим порт — поддерживаем форматы:
+# 0.0.0.0:8443  |  0.0.0.0:8443,20000-29999  |  [::]:8443  |  [::]:8443,20000-29999
+HY_PORT=$(echo "$LISTEN_LINE" | grep -oE ':[0-9]+(,[0-9]+-[0-9]+)?$' | tr -d ':')
+HY_PORT="${HY_PORT:-8443}"
+
+# Определяем Port Hopping
+if echo "$HY_PORT" | grep -q ','; then
+    HAS_PORT_HOPPING=true
+    MAIN_PORT=$(echo "$HY_PORT" | cut -d',' -f1)
+    HOP_RANGE=$(echo "$HY_PORT" | cut -d',' -f2)
+    info "Port Hopping обнаружен: порт $MAIN_PORT, диапазон $HOP_RANGE"
+else
+    HAS_PORT_HOPPING=false
+    MAIN_PORT="$HY_PORT"
+    HOP_RANGE=""
+    info "Порт Hysteria2: $HY_PORT"
+fi
+
+# Показываем статус автоопределения
 if [ -n "$HY_DOMAIN" ]; then
-    cfg_auto "Домен" "$HY_DOMAIN"
+    echo -e "  ${GREEN}✓${NC}  Hysteria2: ${CYAN}${HY_DOMAIN}:${HY_PORT}${NC} ${GRAY}(из конфига)${NC}"
 else
-    warn "Домен не найден в конфиге Hysteria2"
-    read -rp "  Введите домен вручную: " HY_DOMAIN < /dev/tty
-    cfg_manual "Домен" "$HY_DOMAIN"
+    echo -e "  ${YELLOW}?${NC}  Hysteria2 домен: ${YELLOW}не определён${NC}"
+    read -rp "  Домен Hysteria2: " HY_DOMAIN < /dev/tty
+fi
+if [ -n "$SUB_DOMAIN" ]; then
+    echo -e "  ${GREEN}✓${NC}  Sub домен: ${CYAN}${SUB_DOMAIN}${NC} ${GRAY}(из .env)${NC}"
+else
+    echo -e "  ${YELLOW}?${NC}  Sub домен: ${YELLOW}не определён${NC}"
+    read -rp "  Домен подписок Remnawave: " SUB_DOMAIN < /dev/tty
 fi
 
-if [ -n "$HY_PORT" ]; then
-    cfg_auto "Порт" "$HY_PORT"
-else
-    HY_PORT="443"
-    cfg_manual "Порт" "$HY_PORT (по умолчанию)"
-fi
-
+# ── Port Hopping ──────────────────────────────────────────────────
 echo ""
+echo -e "  ${BOLD}Port Hopping${NC} ${GRAY}— рандомизация UDP порта, усложняет блокировку${NC}"
+echo -e "  ${GRAY}──────────────────────────────────────────────────${NC}"
+
+if $HAS_PORT_HOPPING; then
+    echo -e "  ${GREEN}●${NC} Сейчас включён: ${CYAN}${MAIN_PORT} + ${HOP_RANGE}${NC}"
+    echo ""
+    echo -e "  ${BOLD}0)${NC} ${GRAY}Пропустить — оставить как есть${NC}"
+    echo -e "  ${BOLD}1)${NC} Отключить Port Hopping"
+else
+    echo -e "  ${GRAY}●${NC} Сейчас: один порт ${CYAN}${MAIN_PORT}${NC}"
+    echo ""
+    echo -e "  ${BOLD}0)${NC} ${GRAY}Пропустить — оставить как есть${NC}"
+    echo -e "  ${BOLD}1)${NC} ${CYAN}${MAIN_PORT} + 20000-29999${NC}  ${YELLOW}★ рекомендуется${NC}"
+    echo -e "  ${BOLD}2)${NC} ${CYAN}${MAIN_PORT} + 40000-49999${NC}"
+    echo -e "  ${BOLD}3)${NC} ${CYAN}${MAIN_PORT} + 50000-59999${NC}"
+    echo -e "  ${BOLD}4)${NC} ${GRAY}Свой диапазон...${NC}"
+fi
+echo -e "  ${GRAY}──────────────────────────────────────────────────${NC}"
+
+read -rp "  Выбор [0 — пропустить]: " hop_ch < /dev/tty
+hop_ch="${hop_ch:-0}"
+
+if $HAS_PORT_HOPPING; then
+    case "$hop_ch" in
+        0) info "Port Hopping оставлен без изменений" ;;
+        1)
+            sed -i "s|^listen:.*|listen: 0.0.0.0:${MAIN_PORT}|" /etc/hysteria/config.yaml
+            ufw delete allow "${HOP_RANGE}/udp" >/dev/null 2>&1 || true
+            HY_PORT="$MAIN_PORT"
+            HAS_PORT_HOPPING=false; HOP_RANGE=""
+            systemctl restart hysteria-server
+            ok "Port Hopping отключён — порт: $MAIN_PORT"
+            ;;
+        *) info "Port Hopping оставлен без изменений" ;;
+    esac
+else
+    case "$hop_ch" in
+        0) info "Порт оставлен без изменений" ;;
+        1) NEW_RANGE="20000-29999" ;;
+        2) NEW_RANGE="40000-49999" ;;
+        3) NEW_RANGE="50000-59999" ;;
+        4)
+            read -rp "  Диапазон (например 30000-39999): " NEW_RANGE < /dev/tty
+            [[ "$NEW_RANGE" =~ ^[0-9]+-[0-9]+$ ]] || err "Неверный формат диапазона"
+            ;;
+        *) info "Порт оставлен без изменений" ;;
+    esac
+    if [ "${hop_ch:-0}" != "0" ]; then
+        sed -i "s|^listen:.*|listen: 0.0.0.0:${MAIN_PORT},${NEW_RANGE}|" /etc/hysteria/config.yaml
+        START_PORT=$(echo "$NEW_RANGE" | cut -d'-' -f1)
+        END_PORT=$(echo "$NEW_RANGE" | cut -d'-' -f2)
+        ufw allow "${START_PORT}:${END_PORT}/udp" >/dev/null 2>&1 || true
+        HY_PORT="${MAIN_PORT},${NEW_RANGE}"
+        HAS_PORT_HOPPING=true; HOP_RANGE="$NEW_RANGE"
+        systemctl restart hysteria-server
+        ok "Port Hopping включён: $HY_PORT"
+        info "Совместимые клиенты: Hiddify, Nekoray, v2rayN 7.x+"
+        warn "Некоторые старые клиенты не поддерживают Port Hopping в URI"
+    fi
+fi
+
 read -rp "  Название подключения [🇩🇪 Germany Hysteria2]: " HY_NAME < /dev/tty
 HY_NAME="${HY_NAME:-🇩🇪 Germany Hysteria2}"
-cfg_manual "Название" "$HY_NAME"
 
-# Читаем SUB_PUBLIC_DOMAIN из .env
-SUB_DOMAIN=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"')
-PANEL_URL=$(grep "^APP_PORT=" /opt/remnawave/.env 2>/dev/null && echo "http://127.0.0.1:3000" || echo "http://127.0.0.1:3000")
+# ── Шаг 1: hy-webhook ────────────────────────────────────────────
+if $DO_WEBHOOK; then
 
-# Генерируем webhook secret
-WEBHOOK_SECRET=$(openssl rand -hex 32)
-cfg_gen "Webhook secret" "${WEBHOOK_SECRET:0:8}…"
-
-# ── Шаг 1: Webhook сервис ────────────────────────────────────────
-# Пропускаем webhook если выбран режим "только subscription"
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" = "3" ]; then
-    :
-else
-step "Webhook сервис"
+step "Установка hy-webhook"
 
 mkdir -p /opt/hy-webhook /var/lib/hy-webhook
 
-cat > /opt/hy-webhook/hy-webhook.py << 'PYEOF'
-#!/usr/bin/env python3
-import hashlib, hmac, json, logging, os, re, subprocess, sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-WEBHOOK_SECRET  = os.environ.get("WEBHOOK_SECRET", "")
-HYSTERIA_CONFIG = os.environ.get("HYSTERIA_CONFIG", "/etc/hysteria/config.yaml")
-USERS_DB        = os.environ.get("USERS_DB", "/var/lib/hy-webhook/users.json")
-LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8766"))
-HYSTERIA_SVC    = os.environ.get("HYSTERIA_SVC", "hysteria-server")
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
-log = logging.getLogger("hy-webhook")
-
-def load_users():
-    os.makedirs(os.path.dirname(USERS_DB), exist_ok=True)
-    try:
-        with open(USERS_DB) as f: return json.load(f)
-    except: return {}
-
-def save_users(users):
-    os.makedirs(os.path.dirname(USERS_DB), exist_ok=True)
-    with open(USERS_DB, "w") as f: json.dump(users, f, indent=2)
-
-def gen_password(username):
-    seed = f"{username}:{WEBHOOK_SECRET}"
-    return hashlib.sha256(seed.encode()).hexdigest()[:32]
-
-def reload_hysteria():
-    try:
-        r = subprocess.run(["systemctl", "reload-or-restart", HYSTERIA_SVC], capture_output=True, text=True, timeout=10)
-        if r.returncode == 0: log.info("Hysteria2 перезапущен")
-        else: log.warning(f"Ошибка перезапуска: {r.stderr}")
-    except Exception as e: log.error(f"Не удалось перезапустить: {e}")
-
-def update_hysteria_config(users):
-    try:
-        with open(HYSTERIA_CONFIG) as f: config = f.read()
-        lines = ["  userpass:"]
-        for u, p in users.items():
-            safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', u)
-        if len(safe) < 6: safe = safe + '_' * (6 - len(safe))
-            lines.append(f'    {safe}: "{p}"')
-        new_block = "\n".join(lines)
-        pattern = r'(\s*userpass:\s*\n(?:[ \t]+[^\n]+\n?)*)'
-        if re.search(pattern, config):
-            config = re.sub(pattern, "\n" + new_block + "\n", config)
-        else:
-            config = re.sub(r'(auth:\s*\n\s*type:\s*userpass\s*\n)', r'\1' + new_block + "\n", config)
-        with open(HYSTERIA_CONFIG, "w") as f: f.write(config)
-        log.info(f"Конфиг обновлён, пользователей: {len(users)}")
-        return True
-    except Exception as e:
-        log.error(f"Ошибка обновления конфига: {e}"); return False
-
-def verify_signature(body, signature):
-    if not WEBHOOK_SECRET: return True
-    expected = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature.lower().replace("sha256=", ""))
-
-def process_event(payload):
-    scope = payload.get("scope", "")
-    event = payload.get("event", "")
-    data  = payload.get("data", {})
-    if scope != "user": return
-    username = data.get("username", "")
-    if not username: return
-    log.info(f"Событие: {event}, пользователь: {username}")
-    users = load_users()
-    changed = False
-    safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', username)
-    if len(safe) < 6: safe = safe + '_' * (6 - len(safe))
-    if event == "user.created":
-        if safe not in users:
-            users[safe] = gen_password(safe); changed = True
-            log.info(f"Добавлен: {safe}")
-    elif event in ("user.deleted", "user.disabled", "user.limited", "user.expired"):
-        if safe in users:
-            del users[safe]; changed = True
-            log.info(f"Удалён/отключён: {safe}")
-    elif event in ("user.enabled", "user.traffic_reset"):
-        if safe not in users:
-            users[safe] = gen_password(safe); changed = True
-            log.info(f"Восстановлен: {safe}")
-    if changed:
-        save_users(users)
-        if update_hysteria_config(users): reload_hysteria()
-
-class WebhookHandler(BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_GET(self):
-        if self.path == "/health":
-            users = load_users()
-            body = json.dumps({"status": "ok", "users": len(users)}).encode()
-            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
-        else:
-            self.send_response(404); self.end_headers()
-    def do_POST(self):
-        if self.path != "/webhook":
-            self.send_response(404); self.end_headers(); return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
-        sig = self.headers.get("X-Remnawave-Signature", "")
-        if WEBHOOK_SECRET and not verify_signature(body, sig):
-            log.warning("Неверная подпись"); self.send_response(401); self.end_headers(); return
-        try:
-            process_event(json.loads(body))
-            self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
-        except Exception as e:
-            log.error(f"Ошибка: {e}"); self.send_response(500); self.end_headers()
-
-def main():
-    log.info(f"Запуск hy-webhook на порту {LISTEN_PORT}")
-    users = load_users()
-    if users:
-        log.info(f"Загружено {len(users)} пользователей")
-        update_hysteria_config(users)
-    HTTPServer(("127.0.0.1", LISTEN_PORT), WebhookHandler).serve_forever()
-
-if __name__ == "__main__": main()
-PYEOF
-
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SCRIPT_DIR}/hy-webhook.py" ]; then
+    cp "${SCRIPT_DIR}/hy-webhook.py" /opt/hy-webhook/hy-webhook.py
+    info "Используется локальный hy-webhook.py"
+elif [ -f /root/hy-webhook.py ]; then
+    cp /root/hy-webhook.py /opt/hy-webhook/hy-webhook.py
+    info "Используется /root/hy-webhook.py"
+else
+    info "Скачиваем hy-webhook.py с GitHub..."
+    curl -fsSL "https://raw.githubusercontent.com/stump3/setup_rth/main/hy-webhook.py" \
+        -o /opt/hy-webhook/hy-webhook.py \
+        || err "Не удалось скачать hy-webhook.py"
+fi
 chmod +x /opt/hy-webhook/hy-webhook.py
-ok "hy-webhook.py создан"
-info "/opt/hy-webhook/hy-webhook.py"
+ok "hy-webhook.py установлен"
 
-# Systemd сервис
-cat > /etc/systemd/system/hy-webhook.service << SVCEOF
+# Секрет — используем существующий или генерируем новый
+SECRETS_FILE="/etc/hy-webhook.env"
+if [ -f "$SECRETS_FILE" ]; then
+    WEBHOOK_SECRET=$(grep '^WEBHOOK_SECRET=' "$SECRETS_FILE" | cut -d= -f2)
+    info "Используется существующий webhook secret"
+else
+    WEBHOOK_SECRET=$(openssl rand -hex 32)
+    info "Webhook secret сгенерирован"
+fi
+
+cat > "$SECRETS_FILE" << SECRETEOF
+WEBHOOK_SECRET=${WEBHOOK_SECRET}
+HYSTERIA_CONFIG=/etc/hysteria/config.yaml
+USERS_DB=/var/lib/hy-webhook/users.json
+LISTEN_PORT=8766
+HYSTERIA_SVC=hysteria-server
+SECRETEOF
+chmod 600 "$SECRETS_FILE"
+ok "Secrets сохранены в $SECRETS_FILE с правами 600"
+
+cat > /etc/systemd/system/hy-webhook.service << 'SVCEOF'
 [Unit]
 Description=Remnawave → Hysteria2 Webhook Sync
 After=network.target hysteria-server.service
 
 [Service]
 Type=simple
-Environment=WEBHOOK_SECRET=${WEBHOOK_SECRET}
-Environment=HYSTERIA_CONFIG=/etc/hysteria/config.yaml
-Environment=USERS_DB=/var/lib/hy-webhook/users.json
-Environment=LISTEN_PORT=8766
-Environment=HYSTERIA_SVC=hysteria-server
+EnvironmentFile=/etc/hy-webhook.env
 ExecStart=/usr/bin/python3 /opt/hy-webhook/hy-webhook.py
 Restart=always
 RestartSec=5
@@ -294,35 +237,24 @@ SVCEOF
 
 systemctl daemon-reload
 systemctl enable --now hy-webhook
-sleep 2
 
-if systemctl is-active --quiet hy-webhook; then
-    ok "hy-webhook запущен"
-    info "$(systemctl status hy-webhook --no-pager | grep Active: | sed 's/.*Active: //)"
-else
-    warn "hy-webhook не запустился"
-    info "Диагностика: journalctl -u hy-webhook -n 20"
-fi
-fi  # end skip mode3 webhook
+for i in $(seq 1 10); do
+    systemctl is-active --quiet hy-webhook && break || sleep 1
+done
+systemctl is-active --quiet hy-webhook \
+    && ok "hy-webhook запущен на порту 8766" \
+    || err "hy-webhook не запустился — journalctl -u hy-webhook -n 20"
 
-# ── Шаг 2: Синхронизируем существующих пользователей ────────────
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" = "3" ]; then
-    :
-else
-step "Синхронизация пользователей"
+# ── Шаг 2: Синхронизация пользователей ───────────────────────────
+step "Синхронизация существующих пользователей Hysteria2"
 
-# Читаем существующих из конфига Hysteria
-python3 << SYNCEOF
-import re, json, hashlib, os
-
+# Python вынесен во временный файл чтобы избежать конфликта скобок с bash
+cat > /tmp/hy_patch_sync.py << 'PYEOF'
+import re, json, os, sys
 HYSTERIA_CONFIG = "/etc/hysteria/config.yaml"
 USERS_DB = "/var/lib/hy-webhook/users.json"
-WEBHOOK_SECRET = "${WEBHOOK_SECRET}"
-
 with open(HYSTERIA_CONFIG) as f:
     config = f.read()
-
-# Парсим существующих пользователей из userpass блока
 users = {}
 in_userpass = False
 for line in config.split('\n'):
@@ -335,85 +267,78 @@ for line in config.split('\n'):
             users[m.group(1)] = m.group(2)
         elif line.strip() and not line.startswith(' '):
             break
-
+if not users:
+    print("WARN: пользователи не найдены в конфиге")
+    sys.exit(0)
 os.makedirs(os.path.dirname(USERS_DB), exist_ok=True)
 with open(USERS_DB, 'w') as f:
     json.dump(users, f, indent=2)
-
-print(f"Синхронизировано пользователей: {len(users)}")
+print(f"Синхронизировано: {len(users)}")
 for u in users:
     print(f"  - {u}")
-SYNCEOF
-
+PYEOF
+python3 /tmp/hy_patch_sync.py
 ok "Пользователи синхронизированы"
-fi  # end skip sync
 
-# ── Шаг 3: Включаем вебхуки в панели ────────────────────────────
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" != "1" ]; then
-    :  # При частичном обновлении не трогаем .env
-else
-step "Вебхуки Remnawave"
+# ── Шаг 3: Вебхуки в панели ──────────────────────────────────────
+step "Настройка вебхуков Remnawave"
 
-# Обновляем .env
+WEBHOOK_SECRET=$(grep '^WEBHOOK_SECRET=' /etc/hy-webhook.env | cut -d= -f2)
 sed -i "s|^WEBHOOK_ENABLED=.*|WEBHOOK_ENABLED=true|" /opt/remnawave/.env
 sed -i "s|^WEBHOOK_URL=.*|WEBHOOK_URL=http://127.0.0.1:8766/webhook|" /opt/remnawave/.env
 sed -i "s|^WEBHOOK_SECRET_HEADER=.*|WEBHOOK_SECRET_HEADER=${WEBHOOK_SECRET}|" /opt/remnawave/.env
 
 ok "Вебхуки включены в .env"
-info "WEBHOOK_URL=http://127.0.0.1:8766/webhook"
-
-# Перезапускаем панель
-info "Перезапускаем Remnawave..."
 cd /opt/remnawave && docker compose restart remnawave >/dev/null 2>&1
 ok "Remnawave перезапущена"
-fi  # end skip webhooks
+
+fi # DO_WEBHOOK
 
 # ── Шаг 4: Форк subscription-page ───────────────────────────────
-step "Форк subscription-page"
+if $DO_SUBPAGE; then
 
-# Проверяем есть ли Docker
+step "Установка форка subscription-page"
+
 command -v docker &>/dev/null || err "Docker не найден"
 
-# Определяем текущий образ subscription-page
-CURRENT_IMAGE=$(grep "image:" /opt/remnawave/docker-compose.yml | grep -i "subscription" | awk '{print $2}' | head -1)
-info "Текущий образ: $CURRENT_IMAGE"
-
-# Создаём директорию для форка
+rm -rf /opt/hy-subpage
 mkdir -p /opt/hy-subpage
 
-# Скачиваем исходники subscription-page
 info "Скачиваем исходники subscription-page..."
-SUBPAGE_VERSION=$(echo "$CURRENT_IMAGE" | grep -oP ':\K[^:]+$' || echo "latest")
 curl -fsSL "https://github.com/remnawave/subscription-page/archive/refs/heads/main.tar.gz" \
-    -o /opt/hy-subpage/source.tar.gz 2>/dev/null \
-    || { warn "Не удалось скачать исходники — нужен интернет на сервере"; exit 1; }
-
+    -o /opt/hy-subpage/source.tar.gz \
+    || err "Не удалось скачать исходники"
 tar -xzf /opt/hy-subpage/source.tar.gz -C /opt/hy-subpage --strip-components=1
 rm /opt/hy-subpage/source.tar.gz
 ok "Исходники скачаны"
 
-# Применяем патч к root.service.ts
 ROOTSVC="/opt/hy-subpage/backend/src/modules/root/root.service.ts"
 AXSVC="/opt/hy-subpage/backend/src/common/axios/axios.service.ts"
 
-# Патч 1: Добавляем импорт fs
-sed -i "s|import { nanoid } from 'nanoid';|import { nanoid } from 'nanoid';\nimport * as fs from 'node:fs';|" "$ROOTSVC"
+[ -f "$ROOTSVC" ] || err "root.service.ts не найден — структура пакета изменилась"
+[ -f "$AXSVC" ]   || err "axios.service.ts не найден — структура пакета изменилась"
 
-# Патч 2: Инжектируем Hysteria2 URI в ответ подписки
-python3 << PATCHEOF
-import re
+# Патч 1: импорт fs
+if grep -q "import \* as fs from 'node:fs'" "$ROOTSVC"; then
+    info "Патч 1: импорт fs уже есть"
+else
+    sed -i "s|import { nanoid } from 'nanoid';|import { nanoid } from 'nanoid';\nimport * as fs from 'node:fs';|" "$ROOTSVC"
+    ok "Патч 1: импорт fs"
+fi
 
-with open("$ROOTSVC") as f:
+# Патч 2 и 3 — выносим Python во временные файлы
+# Патч 2: инжекция URI + метод getHysteriaUriForUser
+cat > /tmp/hy_patch_rootsvc.py << 'PYEOF'
+import sys
+rootsvc = "/opt/hy-subpage/backend/src/modules/root/root.service.ts"
+with open(rootsvc) as f:
     content = f.read()
 
-old = "            if (!subscriptionDataResponse) {\n                res.socket?.destroy();\n                return;\n            }\n\n            if (subscriptionDataResponse.headers) {"
+if 'getHysteriaUriForUser' in content:
+    print("INFO: Патч 2 уже применён")
+    sys.exit(0)
 
-new = """            if (!subscriptionDataResponse) {
-                res.socket?.destroy();
-                return;
-            }
-
-            // ── Hysteria2 URI injection ──────────────────────────
+inject = """            // ── Hysteria2 URI injection ──────────────────────────
             try {
                 const hyUri = await this.getHysteriaUriForUser(shortUuidLocal, clientIp);
                 if (hyUri) {
@@ -434,18 +359,16 @@ new = """            if (!subscriptionDataResponse) {
             } catch (e) {
                 this.logger.warn('Hysteria2 inject error: ' + e);
             }
-            // ─────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────"""
 
-            if (subscriptionDataResponse.headers) {"""
+old = "            if (subscriptionDataResponse.headers) {"
+if old not in content:
+    print("ERROR: точка вставки не найдена")
+    sys.exit(1)
+content = content.replace(old, inject + "\n\n" + old, 1)
+print("OK: inject добавлен")
 
-if old in content:
-    content = content.replace(old, new)
-    print("OK: inject добавлен")
-else:
-    print("WARN: inject не найден — возможно версия отличается")
-
-# Добавляем метод getHysteriaUriForUser перед последней }
-method = '''
+method = """
     private async getHysteriaUriForUser(
         shortUuid: string,
         clientIp: string,
@@ -465,7 +388,7 @@ method = '''
             if (!userInfo.isOk || !userInfo.response) return null;
             const username = (userInfo.response as any).response?.username;
             if (!username) return null;
-            const safeUsername = username.replace(/[^a-zA-Z0-9_\-]/g, '_').padEnd(6, '_').slice(0, Math.max(6, username.replace(/[^a-zA-Z0-9_\-]/g, '_').length));
+            const safeUsername = username.replace(/[^\\w\\-.]/g, '_');
             const password = users[safeUsername] || users[username];
             if (!password) return null;
             return 'hy2://' + encodeURIComponent(safeUsername) + ':' + password +
@@ -477,22 +400,33 @@ method = '''
         }
     }
 }
-'''
+"""
+
 content = content.rstrip()
-if content.endswith('}'):
-    content = content[:-1].rstrip() + '\n' + method
+if not content.endswith('}'):
+    print("ERROR: конец класса не найден")
+    sys.exit(1)
+content = content[:-1].rstrip() + '\n' + method
+print("OK: getHysteriaUriForUser добавлен")
 
-with open("$ROOTSVC", 'w') as f:
+with open(rootsvc, 'w') as f:
     f.write(content)
-print("OK: метод добавлен")
-PATCHEOF
+PYEOF
+python3 /tmp/hy_patch_rootsvc.py || err "Патч 2 не применился"
+ok "Патч 2: инжекция URI"
 
-# Патч 3: Добавляем getUserByShortUuid в axios.service.ts
-python3 << AXPATCHEOF
-with open("$AXSVC") as f:
+# Патч 3: getUserByShortUuid
+cat > /tmp/hy_patch_axsvc.py << 'PYEOF'
+import sys
+axsvc = "/opt/hy-subpage/backend/src/common/axios/axios.service.ts"
+with open(axsvc) as f:
     content = f.read()
 
-method = '''
+if 'getUserByShortUuid' in content:
+    print("INFO: Патч 3 уже применён")
+    sys.exit(0)
+
+method = """
     public async getUserByShortUuid(
         clientIp: string,
         shortUuid: string,
@@ -500,7 +434,7 @@ method = '''
         try {
             const { data } = await this.axiosInstance.request({
                 method: 'GET',
-                url: 'api/users/by-short-uuid/' + shortUuid,
+                url: 'api/users/get-by/short-uuid/' + shortUuid,
                 headers: { 'x-remnawave-real-ip': clientIp },
             });
             return { isOk: true, response: data };
@@ -509,138 +443,230 @@ method = '''
             return { isOk: false };
         }
     }
-'''
+"""
 
-# Вставляем перед последним методом getSubscription
 insert_before = "    public async getSubscription("
-if insert_before in content:
-    content = content.replace(insert_before, method + "\n    public async getSubscription(", 1)
-    print("OK: getUserByShortUuid добавлен")
-else:
-    print("WARN: место вставки не найдено")
+if insert_before not in content:
+    print("ERROR: место вставки не найдено")
+    sys.exit(1)
+content = content.replace(insert_before, method + "\n" + insert_before, 1)
+print("OK: getUserByShortUuid добавлен")
 
-with open("$AXSVC", 'w') as f:
+with open(axsvc, 'w') as f:
     f.write(content)
-AXPATCHEOF
+PYEOF
+python3 /tmp/hy_patch_axsvc.py || err "Патч 3 не применился"
+ok "Патч 3: getUserByShortUuid"
 
-ok "Патчи применены"
-
-# Собираем Docker образ
-info "Сборка Docker образа (это займёт 2-5 минут)..."
+# ── Сборка образа ─────────────────────────────────────────────────
+info "Сборка Docker образа (2-5 минут)..."
 cd /opt/hy-subpage
 
-# Сначала собираем frontend если нужно
 if [ ! -d "frontend/dist" ]; then
     info "Сборка frontend..."
     docker run --rm -v "$(pwd)/frontend:/app" -w /app node:24-alpine \
         sh -c "npm ci && npm run build" >/dev/null 2>&1 \
-        && ok "Frontend собран" \
-        || warn "Ошибка сборки frontend — используем существующий образ"
+        && ok "Frontend собран" || warn "Ошибка сборки frontend — продолжаем"
 fi
 
-docker build -t remnawave-sub-hy:local . 2>&1 | tail -5
+docker build --no-cache -t remnawave-sub-hy:local . 2>&1 | tail -5
+docker inspect remnawave-sub-hy:local &>/dev/null \
+    || err "Docker образ не собрался"
 ok "Docker образ собран: remnawave-sub-hy:local"
 
-# ── Шаг 5: Обновляем docker-compose.yml ─────────────────────────
-step "Docker Compose"
+# ── Шаг 5: docker-compose.yml ────────────────────────────────────
+step "Обновление docker-compose.yml"
 
-python3 << COMPOSEEOF
-import re
+cat > /tmp/hy_patch_compose.py << PYEOF
+import re, sys
 
 with open("/opt/remnawave/docker-compose.yml") as f:
     content = f.read()
 
-# Меняем образ subscription-page
 content = re.sub(
-    r'(remnawave-subscription-page:.*?\n\s+image:\s*)remnawave/subscription-page:[^\n]+',
+    r'(image:\s*)remnawave/subscription-page:[^\n]+',
     r'\1remnawave-sub-hy:local',
-    content,
-    flags=re.DOTALL
+    content
 )
 
-# Добавляем environment и volumes к subscription-page
-env_block = """    environment:
-      - HY_DOMAIN=${HY_DOMAIN}
-      - HY_PORT=${HY_PORT}
-      - HY_NAME=${HY_NAME}
-      - HY_USERS_DB=/var/lib/hy-webhook/users.json
-    volumes:
-      - /var/lib/hy-webhook:/var/lib/hy-webhook:ro"""
+hy_domain = "${HY_DOMAIN}"
+hy_port   = "${HY_PORT}"
+hy_name   = "${HY_NAME}"
 
-# Находим блок remnawave-subscription-page и добавляем после image:
-pattern = r'(container_name: remnawave-subscription-page\n)'
-if re.search(pattern, content):
-    content = re.sub(pattern, r'\1' + env_block + '\n', content)
+env_block = (
+    "    environment:\n"
+    f"      - HY_DOMAIN={hy_domain}\n"
+    f"      - HY_PORT={hy_port}\n"
+    f"      - HY_NAME={hy_name}\n"
+    "      - HY_USERS_DB=/var/lib/hy-webhook/users.json\n"
+    "    volumes:\n"
+    "      - /var/lib/hy-webhook:/var/lib/hy-webhook:ro\n"
+)
+
+marker = 'container_name: remnawave-subscription-page\n'
+if marker not in content:
+    print("ERROR: блок subscription-page не найден")
+    sys.exit(1)
+
+if 'HY_DOMAIN' not in content:
+    # Удаляем ВСЕ существующие environment/volumes строки подписки
+    # и добавляем наш блок
+    result = []
+    in_sub = False
+    skip_block = False
+    for ln in content.split('\n'):
+        if 'container_name: remnawave-subscription-page' in ln:
+            in_sub = True
+            result.append(ln)
+            continue
+        if in_sub:
+            stripped = ln.strip()
+            # Пропускаем environment и volumes блоки
+            if stripped in ('environment:', 'volumes:'):
+                skip_block = True
+                continue
+            if skip_block:
+                if stripped.startswith('- '):
+                    continue  # строки внутри блока
+                else:
+                    skip_block = False
+                    in_sub = False
+        result.append(ln)
+    content = '\n'.join(result)
+    content = content.replace(marker, marker + env_block)
     print("OK: docker-compose обновлён")
+
+
 else:
-    print("WARN: блок subscription-page не найден")
+    content = re.sub(r'- HY_DOMAIN=.*', f'- HY_DOMAIN={hy_domain}', content)
+    content = re.sub(r'- HY_PORT=.*',   f'- HY_PORT={hy_port}',     content)
+    content = re.sub(r'- HY_NAME=.*',   f'- HY_NAME={hy_name}',     content)
+    print("OK: docker-compose обновлён — существующие значения")
 
 with open("/opt/remnawave/docker-compose.yml", "w") as f:
     f.write(content)
-COMPOSEEOF
+PYEOF
+python3 /tmp/hy_patch_compose.py || err "Ошибка обновления docker-compose.yml"
+ok "docker-compose.yml обновлён"
 
-# Перезапускаем subscription-page
+# ── Шаг 6: nginx ─────────────────────────────────────────────────
+step "Настройка nginx"
+
+if [ -f /opt/remnawave/nginx.conf ]; then
+    if grep -q "location /merge/" /opt/remnawave/nginx.conf; then
+        warn "location /merge/ уже существует — пропускаем"
+    elif ! systemctl is-active --quiet hy-merger 2>/dev/null; then
+        warn "hy-merger не запущен — location /merge/ не добавляем"
+        info "Установите merger: server-manager.sh → Hysteria2 → Подписка → Объединить с Remnawave"
+    else
+        cat > /tmp/hy_patch_nginx.py << 'PYEOF'
+import sys
+with open('/opt/remnawave/nginx.conf') as f:
+    cfg = f.read()
+loc = (
+    "    location /merge/ {\n"
+    "        proxy_pass http://127.0.0.1:8765/;\n"
+    "        proxy_set_header Host $host;\n"
+    "        proxy_set_header X-Real-IP $proxy_protocol_addr;\n"
+    "        proxy_set_header X-Forwarded-For $proxy_protocol_addr;\n"
+    "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+    "    }\n"
+    "    # NOTE: порт 8765 — hy-merger.service\n"
+)
+marker = '    location @redirect {'
+if marker not in cfg:
+    print("WARN: @redirect не найден — добавьте location /merge/ вручную")
+    sys.exit(0)
+cfg = cfg.replace(marker, loc + marker, 1)
+print("OK: location /merge/ добавлен в sub домен")
+with open('/opt/remnawave/nginx.conf', 'w') as f:
+    f.write(cfg)
+PYEOF
+        python3 /tmp/hy_patch_nginx.py
+        ok "nginx.conf обновлён"
+    fi
+
+    docker exec remnawave-nginx nginx -t >/dev/null 2>&1 \
+        && ok "nginx конфиг валиден" \
+        || warn "nginx конфиг невалиден — проверьте вручную"
+fi
+
+# ── Запуск ────────────────────────────────────────────────────────
 cd /opt/remnawave
 docker compose up -d remnawave-subscription-page 2>&1 | tail -3
-sleep 3
+docker compose restart remnawave-nginx >/dev/null 2>&1
 
-if docker ps --format '{{.Names}}' | grep -q "remnawave-subscription-page"; then
-    ok "subscription-page запущен с форком"
-    info "Образ: remnawave-sub-hy:local"
+info "Ждём запуска контейнера..."
+for i in $(seq 1 15); do
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "remnawave-subscription-page" && break || sleep 1
+done
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "remnawave-subscription-page"; then
+    ok "subscription-page запущен"
 else
-    warn "Контейнер не запустился"
-    info "Диагностика: docker logs remnawave-subscription-page"
+    warn "Контейнер не виден в docker ps — проверьте: docker logs remnawave-subscription-page"
 fi
 
-# ── Итог ────────────────────────────────────────────────────────
+fi # DO_SUBPAGE
 
-# Проверяем статусы сервисов
-HY_WH_STATUS=$(systemctl is-active hy-webhook 2>/dev/null || echo "inactive")
-HY_SVC_STATUS=$(systemctl is-active hysteria-server 2>/dev/null || echo "inactive")
-SUB_STATUS=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -q "remnawave-subscription-page" && echo "running" || echo "stopped")
+# ── Очистка временных файлов ──────────────────────────────────────
+rm -f /tmp/hy_patch_*.py
 
-_svc_line() {
-    local name="$1" status="$2"
-    if [ "$status" = "active" ] || [ "$status" = "running" ]; then
-        echo -e "  ${GREEN}✓${NC}  $name"
-    else
-        echo -e "  ${RED}✗${NC}  $name ${DIM}($status)${NC}"
-    fi
-}
+# ── Итог ──────────────────────────────────────────────────────────
+WEBHOOK_SECRET_DISPLAY=""
+[ -f /etc/hy-webhook.env ] && \
+    WEBHOOK_SECRET_DISPLAY=$(grep '^WEBHOOK_SECRET=' /etc/hy-webhook.env | cut -d= -f2)
+
+# ── Статус сервисов ───────────────────────────────────────────────
+HW_STATUS="${RED}○ не запущен${NC}"
+systemctl is-active --quiet hy-webhook 2>/dev/null && HW_STATUS="${GREEN}● запущен${NC}"
+SP_STATUS="${RED}○ не запущен${NC}"
+docker ps --format '{{.Names}}' 2>/dev/null | grep -q "remnawave-subscription-page"     && SP_STATUS="${GREEN}● запущен${NC}"
+RW_STATUS="${RED}○ не запущен${NC}"
+docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^remnawave$"     && RW_STATUS="${GREEN}● запущен${NC}"
 
 echo ""
-echo -e "${BOLD}${GREEN}  ✅ Установка завершена!${NC}"
+echo -e "${GREEN}  ╔══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}  ║   ✅  Установка завершена!                               ║${NC}"
+echo -e "${GREEN}  ╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${BOLD}${WHITE}  Статус сервисов${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-_svc_line "hy-webhook" "$HY_WH_STATUS"
-_svc_line "hysteria-server" "$HY_SVC_STATUS"
-_svc_line "subscription-page" "$SUB_STATUS"
+
+# Статус сервисов
+echo -e "  ${BOLD}Статус сервисов:${NC}"
+echo -e "  hy-webhook             $(echo -e "$HW_STATUS")"
+echo -e "  subscription-page      $(echo -e "$SP_STATUS")"
+echo -e "  remnawave              $(echo -e "$RW_STATUS")"
 echo ""
-echo -e "${BOLD}${WHITE}  Конфигурация${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-echo -e "  ${DIM}Домен   ${NC}${HY_DOMAIN}"
-echo -e "  ${DIM}Порт    ${NC}${HY_PORT}"
-echo -e "  ${DIM}Название${NC}${HY_NAME}"
-echo ""
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" = "2" ]; then
-    echo -e "${BOLD}${WHITE}  Webhook secret${NC}${DIM} (не изменился)${NC}"
-    echo -e "  ${DIM}────────────────────────────${NC}"
-    echo -e "  ${DIM}${WEBHOOK_SECRET}${NC}"
-else
-    echo -e "${BOLD}${YELLOW}  ⚠  Webhook secret — сохраните сейчас, больше не показывается!${NC}"
-    echo -e "  ${DIM}────────────────────────────${NC}"
-    echo -e "  ${CYAN}${WEBHOOK_SECRET}${NC}"
+
+# Конфигурация
+echo -e "  ${BOLD}Конфигурация:${NC}"
+echo -e "  ${GRAY}Hysteria2 :${NC}   ${CYAN}${HY_DOMAIN}:${HY_PORT}${NC}"
+echo -e "  ${GRAY}Sub домен :${NC}   ${CYAN}${SUB_DOMAIN}${NC}"
+if $HAS_PORT_HOPPING; then
+    echo -e "  ${GRAY}Port Hopping:${NC} ${GREEN}включён${NC} — диапазон ${CYAN}${HOP_RANGE}${NC}"
 fi
 echo ""
-echo -e "${BOLD}${WHITE}  Проверка${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-echo -e "  ${DIM}Health:  ${NC}curl -s http://127.0.0.1:8766/health"
-echo -e "  ${DIM}Логи:    ${NC}journalctl -u hy-webhook -f"
-echo -e "  ${DIM}Контейнер: ${NC}docker logs remnawave-subscription-page"
+
+# Webhook secret — с предупреждением
+if [ -n "$WEBHOOK_SECRET_DISPLAY" ]; then
+    echo -e "  ${YELLOW}⚠  Webhook secret — сохраните сейчас, больше не показывается:${NC}"
+    echo -e "  ${GRAY}   Файл: /etc/hy-webhook.env${NC}"
+    echo ""
+    echo -e "  ${BOLD}${CYAN}  ${WEBHOOK_SECRET_DISPLAY}${NC}"
+    echo ""
+fi
+
+# Команды проверки
+echo -e "  ${BOLD}Проверка:${NC}"
+echo -e "  ${GRAY}┌─────────────────────────────────────────────────┐${NC}"
+echo -e "  ${GRAY}│${NC}  curl -s http://127.0.0.1:8766/health           ${GRAY}│${NC}"
+echo -e "  ${GRAY}│${NC}  journalctl -u hy-webhook -f                    ${GRAY}│${NC}"
+echo -e "  ${GRAY}│${NC}  docker logs remnawave-subscription-page         ${GRAY}│${NC}"
+echo -e "  ${GRAY}└─────────────────────────────────────────────────┘${NC}"
 echo ""
-echo -e "${BOLD}${WHITE}  Что дальше${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-echo -e "  • Новые пользователи панели получат Hysteria2 URI автоматически"
-echo -e "  • Существующим пользователям — попросите обновить подписку в клиенте"
+
+# Подписка
+echo -e "  ${BOLD}Подписка:${NC}"
+echo -e "  ${CYAN}  https://${SUB_DOMAIN}/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
 echo ""
+echo -e "  ${GRAY}При создании пользователя в Remnawave его Hysteria2 URI${NC}"
+echo -e "  ${GRAY}появится в подписке автоматически через webhook.${NC}"
