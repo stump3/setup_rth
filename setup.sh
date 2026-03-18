@@ -1161,6 +1161,440 @@ get_hysteria_version() {
     /usr/local/bin/hysteria version 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo ""
 }
 
+
+# ═══════════════════════════════════════════════════════════════════
+# ████████████████████  PANEL EXTENSIONS  ██████████████████████████
+# ═══════════════════════════════════════════════════════════════════
+
+PANEL_TOKEN_FILE="/opt/remnawave/.panel_token"
+PANEL_API="http://127.0.0.1:3000"
+
+# ── API утилиты ───────────────────────────────────────────────────
+panel_api_request() {
+    local method="$1" url="$2" token="$3" data="$4"
+    local args=(-s -X "$method" "${PANEL_API}${url}"
+        -H "Authorization: Bearer $token"
+        -H "Content-Type: application/json"
+        -H "X-Forwarded-For: 127.0.0.1"
+        -H "X-Forwarded-Proto: https"
+        -H "X-Remnawave-Client-Type: browser")
+    [ -n "$data" ] && args+=(-d "$data")
+    curl "${args[@]}"
+}
+
+panel_get_token() {
+    # Проверяем сохранённый токен
+    if [ -f "$PANEL_TOKEN_FILE" ]; then
+        local token; token=$(cat "$PANEL_TOKEN_FILE")
+        local test; test=$(panel_api_request "GET" "/api/config-profiles" "$token")
+        if echo "$test" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if 'configProfiles' in str(d) else 1)" 2>/dev/null; then
+            echo "$token"
+            return 0
+        fi
+        rm -f "$PANEL_TOKEN_FILE"
+    fi
+    # Логин
+    local username password
+    read -rp "  Логин панели: " username < /dev/tty
+    read -rsp "  Пароль панели: " password < /dev/tty; echo ""
+    local resp; resp=$(panel_api_request "POST" "/api/auth/login" "" "{"username":"$username","password":"$password"}")
+    local token; token=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('response',{}).get('accessToken',''))" 2>/dev/null)
+    if [ -z "$token" ] || [ "$token" = "null" ]; then
+        err "Не удалось получить токен: $resp"
+        return 1
+    fi
+    echo "$token" > "$PANEL_TOKEN_FILE"
+    ok "Авторизация успешна"
+    echo "$token"
+}
+
+# ── Автообновление скрипта ────────────────────────────────────────
+panel_update_script() {
+    header "Обновление скрипта"
+    local script_url="https://raw.githubusercontent.com/stump3/setup_rth/main/setup.sh"
+    info "Проверяем обновления..."
+    local remote; remote=$(curl -fsSL "$script_url" 2>/dev/null)
+    [ -z "$remote" ] && { warn "Не удалось получить скрипт с GitHub"; return 1; }
+    local remote_ver; remote_ver=$(echo "$remote" | grep "^SCRIPT_VERSION=" | head -1 | sed 's/SCRIPT_VERSION=//;s/[^a-zA-Z0-9._-]//g' | tr -d ' ')
+    local local_ver; local_ver=$(date -r "$0" +'v%y%m.%d%H%M' 2>/dev/null || echo "unknown")
+    info "Локальная версия: $local_ver"
+    info "Версия на GitHub: $remote_ver"
+    echo ""
+    read -rp "  Обновить? (y/n): " ch < /dev/tty
+    [[ "$ch" =~ ^[yY]$ ]] || { info "Отменено"; return; }
+    local tmp; tmp=$(mktemp)
+    curl -fsSL "$script_url" -o "$tmp" || { err "Ошибка загрузки"; rm -f "$tmp"; return 1; }
+    cp "$tmp" "$0" && chmod +x "$0"
+    rm -f "$tmp"
+    ok "Скрипт обновлён! Перезапустите: bash $0"
+}
+
+# ── Удаление панели ───────────────────────────────────────────────
+panel_remove() {
+    header "Удалить панель"
+    echo -e "  ${BOLD}1)${RESET} 🗑️   Только скрипт (setup.sh)"
+    echo -e "  ${BOLD}2)${RESET} 💣  Скрипт + все данные панели (необратимо!)"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1)
+            read -rp "  Удалить setup.sh? (y/n): " c < /dev/tty
+            [[ "$c" =~ ^[yY]$ ]] || return
+            rm -f "$0"
+            ok "Скрипт удалён"
+            exit 0
+            ;;
+        2)
+            echo ""
+            warn "ЭТО УДАЛИТ ВСЕ ДАННЫЕ ПАНЕЛИ, БД, КОНФИГИ!"
+            warn "Действие необратимо!"
+            echo ""
+            read -rp "  Введите 'DELETE' для подтверждения: " c < /dev/tty
+            [ "$c" != "DELETE" ] && { info "Отменено"; return; }
+            info "Останавливаем контейнеры..."
+            cd /opt/remnawave 2>/dev/null && docker compose down -v --rmi all --remove-orphans 2>/dev/null || true
+            docker system prune -a --volumes -f >/dev/null 2>&1 || true
+            rm -rf /opt/remnawave
+            rm -f "$0"
+            ok "Панель и скрипт удалены"
+            exit 0
+            ;;
+        0) return ;;
+    esac
+}
+
+# ── Переустановка панели ──────────────────────────────────────────
+panel_reinstall() {
+    header "Переустановить панель"
+    echo ""
+    warn "ВСЕ ДАННЫЕ БУДУТ УДАЛЕНЫ: БД, пользователи, конфиги!"
+    warn "После переустановки потребуется заново настроить панель."
+    echo ""
+    read -rp "  Продолжить? Введите 'YES': " c < /dev/tty
+    [ "$c" != "YES" ] && { info "Отменено"; return; }
+    info "Удаляем старую установку..."
+    cd /opt/remnawave 2>/dev/null && docker compose down -v --rmi all --remove-orphans >/dev/null 2>&1 || true
+    docker system prune -a --volumes -f >/dev/null 2>&1 || true
+    rm -rf /opt/remnawave
+    ok "Старая установка удалена"
+    info "Запускаем установку заново..."
+    panel_install
+}
+
+# ── WARP Native ───────────────────────────────────────────────────
+panel_warp_menu() {
+    clear
+    header "WARP Native"
+    echo -e "  ${BOLD}1)${RESET} ⬇️   Установить WARP"
+    echo -e "  ${BOLD}2)${RESET} ➕  Добавить в профиль Xray"
+    echo -e "  ${BOLD}3)${RESET} ➖  Удалить из профиля Xray"
+    echo -e "  ${BOLD}4)${RESET} 🗑️   Удалить WARP с системы"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh); read -rp "Enter..." < /dev/tty ;;
+        2) panel_warp_add_config ;;
+        3) panel_warp_remove_config ;;
+        4) bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/uninstall.sh); read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    panel_warp_menu
+}
+
+panel_warp_select_profile() {
+    local resp="$1"
+    echo "$resp" | python3 - << 'PY'
+import sys, json
+d = json.load(sys.stdin)
+ps = d.get('response', {}).get('configProfiles', [])
+for i, p in enumerate(ps, 1):
+    print(str(i) + ') ' + p['name'] + ' [' + p['uuid'] + ']')
+PY
+}
+
+panel_warp_get_uuid() {
+    local resp="$1"
+    local num="$2"
+    echo "$resp" | python3 - "$num" << 'PY'
+import sys, json
+d = json.load(sys.stdin)
+num = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+ps = d.get('response', {}).get('configProfiles', [])
+try:
+    print(ps[num - 1]['uuid'])
+except Exception:
+    pass
+PY
+}
+
+panel_warp_add_config() {
+    header "WARP — Добавить в профиль"
+    [ -d /opt/remnawave ] || { warn "Панель не установлена"; return 1; }
+    local token; token=$(panel_get_token) || return 1
+    local resp; resp=$(panel_api_request "GET" "/api/config-profiles" "$token")
+    echo ""
+    panel_warp_select_profile "$resp"
+    echo ""
+    read -rp "  Номер профиля: " num < /dev/tty
+    local uuid; uuid=$(panel_warp_get_uuid "$resp" "$num")
+    [ -z "$uuid" ] && { warn "Неверный выбор"; return 1; }
+    local cfg_resp; cfg_resp=$(panel_api_request "GET" "/api/config-profiles/$uuid" "$token")
+    local cfg_json
+    cfg_json=$(echo "$cfg_resp" | python3 - << 'PY'
+import sys, json
+d = json.load(sys.stdin)
+cfg = d.get('response', {}).get('config', {})
+ob = cfg.get('outbounds', [])
+if not any(o.get('tag') == 'warp-out' for o in ob):
+    ob.append({'tag': 'warp-out', 'protocol': 'freedom',
+        'settings': {'domainStrategy': 'UseIP'},
+        'streamSettings': {'sockopt': {'interface': 'warp', 'tcpFastOpen': True}}})
+    cfg['outbounds'] = ob
+rules = cfg.get('routing', {}).get('rules', [])
+if not any(r.get('outboundTag') == 'warp-out' for r in rules):
+    rules.append({'type': 'field',
+        'domain': ['whoer.net', 'browserleaks.com', '2ip.io', '2ip.ru'],
+        'outboundTag': 'warp-out'})
+    cfg['routing']['rules'] = rules
+print(json.dumps(cfg))
+PY
+)
+    [ -z "$cfg_json" ] && { err "Ошибка обработки конфига"; return 1; }
+    local upd; upd=$(panel_api_request "PATCH" "/api/config-profiles" "$token" "{\"uuid\":\"$uuid\",\"config\":$cfg_json}")
+    echo "$upd" | python3 -c 'import sys,json; d=json.load(sys.stdin); exit(0 if d.get("response") else 1)' 2>/dev/null \
+        && ok "WARP добавлен в профиль!" || warn "Ошибка обновления: $upd"
+    read -rp "Enter..." < /dev/tty
+}
+
+panel_warp_remove_config() {
+    header "WARP — Удалить из профиля"
+    [ -d /opt/remnawave ] || { warn "Панель не установлена"; return 1; }
+    local token; token=$(panel_get_token) || return 1
+    local resp; resp=$(panel_api_request "GET" "/api/config-profiles" "$token")
+    echo ""
+    panel_warp_select_profile "$resp"
+    echo ""
+    read -rp "  Номер профиля: " num < /dev/tty
+    local uuid; uuid=$(panel_warp_get_uuid "$resp" "$num")
+    [ -z "$uuid" ] && { warn "Неверный выбор"; return 1; }
+    local cfg_resp; cfg_resp=$(panel_api_request "GET" "/api/config-profiles/$uuid" "$token")
+    local cfg_json
+    cfg_json=$(echo "$cfg_resp" | python3 - << 'PY'
+import sys, json
+d = json.load(sys.stdin)
+cfg = d.get('response', {}).get('config', {})
+ob = cfg.get('outbounds', [])
+cfg['outbounds'] = [o for o in ob if o.get('tag') != 'warp-out']
+rules = cfg.get('routing', {}).get('rules', [])
+cfg['routing']['rules'] = [r for r in rules if r.get('outboundTag') != 'warp-out']
+print(json.dumps(cfg))
+PY
+)
+    [ -z "$cfg_json" ] && { err "Ошибка обработки конфига"; return 1; }
+    local upd; upd=$(panel_api_request "PATCH" "/api/config-profiles" "$token" "{\"uuid\":\"$uuid\",\"config\":$cfg_json}")
+    echo "$upd" | python3 -c 'import sys,json; d=json.load(sys.stdin); exit(0 if d.get("response") else 1)' 2>/dev/null \
+        && ok "WARP удалён из профиля!" || warn "Ошибка обновления: $upd"
+    read -rp "Enter..." < /dev/tty
+}
+
+# ── Selfsteal шаблоны ─────────────────────────────────────────────
+panel_template_menu() {
+    clear
+    header "Selfsteal — шаблон сайта"
+    echo -e "  ${BOLD}1)${RESET} 🎲  Случайный шаблон"
+    echo -e "  ${BOLD}2)${RESET} 🌐  Simple web templates"
+    echo -e "  ${BOLD}3)${RESET} 🔷  SNI templates"
+    echo -e "  ${BOLD}4)${RESET} ⬜  Nothing SNI"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) panel_install_template "" ;;
+        2) panel_install_template "simple" ;;
+        3) panel_install_template "sni" ;;
+        4) panel_install_template "nothing" ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    panel_template_menu
+}
+
+panel_install_template() {
+    local src="$1"
+    local urls=(
+        "https://github.com/eGamesAPI/simple-web-templates/archive/refs/heads/main.zip"
+        "https://github.com/distillium/sni-templates/archive/refs/heads/main.zip"
+        "https://github.com/prettyleaf/nothing-sni/archive/refs/heads/main.zip"
+    )
+    local selected_url
+    case "$src" in
+        "simple")  selected_url="${urls[0]}" ;;
+        "sni")     selected_url="${urls[1]}" ;;
+        "nothing") selected_url="${urls[2]}" ;;
+        *)
+            local idx=$((RANDOM % 3))
+            selected_url="${urls[$idx]}"
+            ;;
+    esac
+    info "Скачиваем шаблон..."
+    cd /opt/ || return 1
+    rm -f main.zip
+    rm -rf simple-web-templates-main sni-templates-main nothing-sni-main
+    wget -q --timeout=30 "$selected_url" -O main.zip || { err "Ошибка загрузки"; return 1; }
+    unzip -o main.zip &>/dev/null || { err "Ошибка распаковки"; return 1; }
+    rm -f main.zip
+    local dir template
+    if [[ "$selected_url" == *"eGamesAPI"* ]]; then
+        dir="simple-web-templates-main"
+        cd "$dir" && rm -rf assets .gitattributes README.md _config.yml 2>/dev/null
+        mapfile -t templates < <(find . -maxdepth 1 -type d -not -path .)
+        template="${templates[$RANDOM % ${#templates[@]}]}"
+    elif [[ "$selected_url" == *"nothing-sni"* ]]; then
+        dir="nothing-sni-main"
+        cd "$dir" && rm -rf .github README.md 2>/dev/null
+        template="$((RANDOM % 8 + 1)).html"
+    else
+        dir="sni-templates-main"
+        cd "$dir" && rm -rf assets README.md index.html 2>/dev/null
+        mapfile -t templates < <(find . -maxdepth 1 -type d -not -path .)
+        template="${templates[$RANDOM % ${#templates[@]}]}"
+    fi
+    # Рандомизация HTML
+    local rand_id; rand_id=$(openssl rand -hex 8)
+    local rand_title="Page_$(openssl rand -hex 4)"
+    find "./$template" -type f -name "*.html" -exec sed -i         -e "s|<title>.*</title>|<title>${rand_title}</title>|"         -e "s/<\/head>/<meta name="page-id" content="${rand_id}">
+<\/head>/"         {} \; 2>/dev/null || true
+    # Копируем в /var/www/html
+    mkdir -p /var/www/html
+    rm -rf /var/www/html/*
+    if [ -d "./$template" ]; then
+        cp -a "./$template"/. /var/www/html/
+    elif [ -f "./$template" ]; then
+        cp "./$template" /var/www/html/index.html
+    fi
+    cd /opt/
+    rm -rf simple-web-templates-main sni-templates-main nothing-sni-main
+    ok "Шаблон установлен: $template"
+    read -rp "Enter..." < /dev/tty
+}
+
+# ── Страница подписки ─────────────────────────────────────────────
+panel_subpage_menu() {
+    clear
+    header "Страница подписки"
+    echo -e "  ${BOLD}1)${RESET} 🎨  Установить Orion шаблон"
+    echo -e "  ${BOLD}2)${RESET} 🏷️   Настроить брендинг"
+    echo -e "  ${BOLD}3)${RESET} ♻️   Восстановить оригинал"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) panel_subpage_install_orion ;;
+        2) panel_subpage_branding ;;
+        3) panel_subpage_restore ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    panel_subpage_menu
+}
+
+panel_subpage_install_orion() {
+    header "Установка Orion шаблона"
+    [ -f /opt/remnawave/docker-compose.yml ] || { warn "Панель не установлена"; return 1; }
+    local index="/opt/remnawave/index.html"
+    local compose="/opt/remnawave/docker-compose.yml"
+    local primary="https://raw.githubusercontent.com/legiz-ru/Orion/refs/heads/main/index.html"
+    local fallback="https://cdn.jsdelivr.net/gh/legiz-ru/Orion@main/index.html"
+    info "Скачиваем Orion..."
+    rm -f "$index"
+    if ! curl -fsSL "$primary" -o "$index" 2>/dev/null; then
+        curl -fsSL "$fallback" -o "$index" || { err "Ошибка загрузки"; return 1; }
+    fi
+    # Монтируем в docker-compose
+    if command -v yq &>/dev/null; then
+        yq eval 'del(.services."remnawave-subscription-page".volumes)' -i "$compose"
+        yq eval '.services."remnawave-subscription-page".volumes += ["./index.html:/opt/app/frontend/index.html"]' -i "$compose"
+    else
+        # Простая замена если нет yq
+        warn "yq не установлен — монтирование не добавлено автоматически"
+        warn "Добавьте вручную в docker-compose.yml:"
+        echo "  volumes:"
+        echo "    - ./index.html:/opt/app/frontend/index.html"
+    fi
+    cd /opt/remnawave
+    docker compose restart remnawave-subscription-page >/dev/null 2>&1
+    ok "Orion установлен!"
+    read -rp "Enter..." < /dev/tty
+}
+
+panel_subpage_branding() {
+    header "Брендинг подписки"
+    local config="/opt/remnawave/app-config.json"
+    if [ -f "$config" ]; then
+        local name logo support
+        name=$(python3 -c "import json; d=json.load(open('$config')); print(d.get('config',{}).get('branding',{}).get('name','—'))" 2>/dev/null)
+        logo=$(python3 -c "import json; d=json.load(open('$config')); print(d.get('config',{}).get('branding',{}).get('logoUrl','—'))" 2>/dev/null)
+        support=$(python3 -c "import json; d=json.load(open('$config')); print(d.get('config',{}).get('branding',{}).get('supportUrl','—'))" 2>/dev/null)
+        echo ""
+        echo -e "  ${GRAY}Текущие значения:${NC}"
+        echo -e "  Название:  ${CYAN}${name}${NC}"
+        echo -e "  Логотип:   ${CYAN}${logo}${NC}"
+        echo -e "  Поддержка: ${CYAN}${support}${NC}"
+        echo ""
+    fi
+    local new_name new_logo new_support
+    read -rp "  Название (Enter — пропустить): " new_name < /dev/tty
+    read -rp "  URL логотипа (Enter — пропустить): " new_logo < /dev/tty
+    read -rp "  URL поддержки (Enter — пропустить): " new_support < /dev/tty
+    # Обновляем конфиг
+    python3 << PYEOF
+import json, os
+config_file = "$config"
+try:
+    with open(config_file) as f:
+        d = json.load(f)
+except:
+    d = {"config": {}}
+if "config" not in d:
+    d["config"] = {}
+if "branding" not in d["config"]:
+    d["config"]["branding"] = {}
+if "$new_name":  d["config"]["branding"]["name"] = "$new_name"
+if "$new_logo":  d["config"]["branding"]["logoUrl"] = "$new_logo"
+if "$new_support": d["config"]["branding"]["supportUrl"] = "$new_support"
+with open(config_file, "w") as f:
+    json.dump(d, f, indent=2)
+print("OK")
+PYEOF
+    cd /opt/remnawave && docker compose restart remnawave-subscription-page >/dev/null 2>&1
+    ok "Брендинг обновлён!"
+    read -rp "Enter..." < /dev/tty
+}
+
+panel_subpage_restore() {
+    header "Восстановить оригинал"
+    read -rp "  Восстановить оригинальную страницу подписки? (y/n): " c < /dev/tty
+    [[ "$c" =~ ^[yY]$ ]] || return
+    rm -f /opt/remnawave/index.html /opt/remnawave/app-config.json
+    if command -v yq &>/dev/null; then
+        yq eval 'del(.services."remnawave-subscription-page".volumes)' -i /opt/remnawave/docker-compose.yml
+    fi
+    cd /opt/remnawave && docker compose restart remnawave-subscription-page >/dev/null 2>&1
+    ok "Оригинал восстановлен!"
+    read -rp "Enter..." < /dev/tty
+}
+
+# ── Remnawave CLI ─────────────────────────────────────────────────
+panel_cli() {
+    header "Remnawave CLI"
+    info "Запуск интерактивного CLI панели..."
+    docker exec -it remnawave remnawave || warn "Не удалось запустить CLI. Панель запущена?"
+    read -rp "Enter..." < /dev/tty
+}
+
 panel_menu() {
     local ver; ver=$(get_remnawave_version)
     local panel_domain=""
@@ -1175,19 +1609,82 @@ panel_menu() {
     echo ""
     echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
     echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
-    echo -e "  ${BOLD}3)${RESET} 📦  Миграция на другой сервер"
+    echo -e "  ${BOLD}3)${RESET} 🌐  WARP Native"
+    echo -e "  ${BOLD}4)${RESET} 🎨  Страница подписки"
+    echo -e "  ${BOLD}5)${RESET} 🖼️   Selfsteal шаблон"
+    echo -e "  ${BOLD}6)${RESET} 🔄  Обновить скрипт"
+    echo -e "  ${BOLD}7)${RESET} 📦  Миграция на другой сервер"
+    echo -e "  ${BOLD}8)${RESET} 🗑️   Удалить панель"
     echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
     echo ""
     local ch; read -rp "Выбор: " ch < /dev/tty
     case "$ch" in
-        1) panel_install ;;
-        2) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT"             || warn "Панель не установлена. Сначала выполните установку." ;;
-        3) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT" migrate             || warn "Панель не установлена." ;;
+        1) panel_submenu_install ;;
+        2) panel_submenu_manage ;;
+        3) panel_warp_menu ;;
+        4) panel_subpage_menu ;;
+        5) panel_template_menu ;;
+        6) panel_update_script; read -rp "Enter..." < /dev/tty ;;
+        7) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT" migrate             || warn "Панель не установлена." ;;
+        8) panel_remove ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
     panel_menu
 }
+
+panel_submenu_install() {
+    clear
+    header "Remnawave Panel — Установка"
+    echo -e "  ${BOLD}1)${RESET} 🆕  Установить"
+    echo -e "  ${BOLD}2)${RESET} 💣  Переустановить (сброс всех данных!)"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) panel_install ;;
+        2) panel_reinstall ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+}
+
+panel_submenu_manage() {
+    clear
+    header "Remnawave Panel — Управление"
+    echo -e "  ${BOLD}1)${RESET} 📋  Логи"
+    echo -e "  ${BOLD}2)${RESET} 📊  Статус"
+    echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
+    echo -e "  ${BOLD}4)${RESET} ▶️   Старт"
+    echo -e "  ${BOLD}5)${RESET} 📦  Обновить"
+    echo -e "  ${BOLD}6)${RESET} 🔒  SSL"
+    echo -e "  ${BOLD}7)${RESET} 💾  Бэкап"
+    echo -e "  ${BOLD}8)${RESET} 🏥  Диагноз"
+    echo -e "  ${BOLD}9)${RESET} 🔓  Открыть порт 8443"
+    echo -e " ${BOLD}10)${RESET} 🔐  Закрыть порт 8443"
+    echo -e " ${BOLD}11)${RESET} 💻  Remnawave CLI"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    [ -x "$PANEL_MGMT_SCRIPT" ] || { warn "Панель не установлена."; return; }
+    case "$ch" in
+        1)  "$PANEL_MGMT_SCRIPT" logs ;;
+        2)  "$PANEL_MGMT_SCRIPT" status ;;
+        3)  "$PANEL_MGMT_SCRIPT" restart ;;
+        4)  "$PANEL_MGMT_SCRIPT" start ;;
+        5)  "$PANEL_MGMT_SCRIPT" update ;;
+        6)  "$PANEL_MGMT_SCRIPT" ssl ;;
+        7)  "$PANEL_MGMT_SCRIPT" backup ;;
+        8)  "$PANEL_MGMT_SCRIPT" diag ;;
+        9)  "$PANEL_MGMT_SCRIPT" open8443 ;;
+        10) "$PANEL_MGMT_SCRIPT" close8443 ;;
+        11) panel_cli ;;
+        0)  return ;;
+        *)  warn "Неверный выбор" ;;
+    esac
+    panel_submenu_manage
+}
+
 
 # ═══════════════════════════════════════════════════════════════════
 # ████████████████████  TELEMT SECTION  ████████████████████████████
