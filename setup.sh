@@ -3337,12 +3337,11 @@ migrate_menu() {
 
 main_menu() {
     clear
-    echo -e "${PURPLE}"
-    echo "  ╔══════════════════════════════════════════════════════════╗"
-    echo "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
-    echo -e "  ║                                          ${GRAY}${SCRIPT_VERSION}${NC}  ║"
-    echo "  ╚══════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    echo -e "${PURPLE}  ╔══════════════════════════════════════════════════════════╗"
+    echo -e "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
+    echo -e "  ║                                          ${GRAY}${SCRIPT_VERSION}${PURPLE}  ║"
+    echo -e "  ╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
 
     # Быстрый статус
     local panel_status telemt_status hysteria_status
