@@ -1478,21 +1478,76 @@ panel_update_script() {
     header "Обновление скрипта"
     local script_url="https://raw.githubusercontent.com/stump3/setup_rth/main/setup.sh"
     info "Проверяем обновления..."
-    local remote; remote=$(curl -fsSL "$script_url" 2>/dev/null)
-    [ -z "$remote" ] && { warn "Не удалось получить скрипт с GitHub"; return 1; }
-    # Берём SCRIPT_VERSION_STATIC — статическую строку, не команду
-    local remote_ver; remote_ver=$(echo "$remote" | grep "^SCRIPT_VERSION_STATIC=" | head -1         | sed 's/SCRIPT_VERSION_STATIC=//;s/[^a-zA-Z0-9._-]//g' | tr -d ' ')
-    local local_ver; local_ver="$SCRIPT_VERSION"
-    info "Локальная версия: $local_ver"
-    info "Версия на GitHub: ${remote_ver:-неизвестна (нет SCRIPT_VERSION_STATIC)}"
-    echo ""
-    read -rp "  Обновить? (y/n): " ch < /dev/tty
-    [[ "$ch" =~ ^[yY]$ ]] || { info "Отменено"; return; }
+
+    # Скачиваем сразу в temp-файл — не в переменную (избегаем проблем с EOF/stdin)
     local tmp; tmp=$(mktemp)
-    curl -fsSL "$script_url" -o "$tmp" || { err "Ошибка загрузки"; rm -f "$tmp"; return 1; }
-    cp "$tmp" "$0" && chmod +x "$0"
+    if ! curl -fsSL "$script_url" -o "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        warn "Не удалось получить скрипт с GitHub"
+        return 1
+    fi
+
+    local remote_ver; remote_ver=$(grep "^SCRIPT_VERSION_STATIC=" "$tmp" | head -1         | sed 's/SCRIPT_VERSION_STATIC=//;s/[^a-zA-Z0-9._-]//g' | tr -d " ")
+    local local_ver; local_ver="$SCRIPT_VERSION"
+
+    info "Локальная версия: $local_ver"
+    info "Версия на GitHub: ${remote_ver:-неизвестна}"
+    echo ""
+
+    # Определяем нужно ли обновление
+    if [ -n "$remote_ver" ] && [ "$remote_ver" = "$local_ver" ]; then
+        ok "Установлена актуальная версия."
+        echo ""
+        if ! confirm "Переустановить всё равно?" n; then
+            rm -f "$tmp"; return
+        fi
+    elif [ -n "$remote_ver" ] && [[ "$local_ver" > "$remote_ver" ]]; then
+        warn "Локальная версия новее GitHub. Вы уже используете более новый скрипт."
+        echo ""
+        if ! confirm "Перезаписать локальную версию версией с GitHub?" n; then
+            rm -f "$tmp"; return
+        fi
+    else
+        if ! confirm "Обновить до $remote_ver?" y; then
+            rm -f "$tmp"; return
+        fi
+    fi
+
+    # Определяем путь к текущему скрипту
+    local script_path; script_path=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")
+    cp "$tmp" "$script_path" && chmod +x "$script_path"
     rm -f "$tmp"
-    ok "Скрипт обновлён! Перезапустите: bash $0"
+    ok "Скрипт обновлён → $script_path"
+    warn "Перезапустите: bash $script_path"
+}
+
+# ── Переустановка скрипта управления ─────────────────────────────
+panel_reinstall_mgmt() {
+    header "Переустановить скрипт управления (rp)"
+    local nc="/opt/remnawave/nginx.conf"
+    [ -f "$nc" ] || { warn "nginx.conf не найден — панель не установлена?"; return 1; }
+
+    # Извлекаем домен и cookie из nginx.conf
+    local pd ck cv mode
+    pd=$(grep -m1 "server_name " "$nc" | awk '{print $2}' | tr -d ';')
+    ck=$(grep "map \$http_cookie" "$nc" -A2 | grep -oP '~\*\K\w+(?==)' | head -1)
+    cv=$(grep "map \$http_cookie" "$nc" -A2 | grep -oP '=\K\w+(?= 1)' | head -1)
+    mode=$([ -f /opt/remnawave/docker-compose.yml ] && grep -q "remnanode" /opt/remnawave/docker-compose.yml && echo "1" || echo "2")
+
+    if [ -z "$pd" ] || [ -z "$ck" ] || [ -z "$cv" ]; then
+        warn "Не удалось извлечь параметры из nginx.conf"
+        return 1
+    fi
+
+    info "Домен: $pd  |  Cookie: $ck=$cv  |  Режим: $mode"
+    echo ""
+    if ! confirm "Переустановить /usr/local/bin/remnawave_panel?" y; then
+        return
+    fi
+
+    panel_install_mgmt_script "$pd" "$ck" "$cv" "$mode"
+    ok "Скрипт управления переустановлен. Изменения применены."
+    info "Перезапустите терминал или выполните: source /etc/bash.bashrc"
 }
 
 # ── Удаление панели ───────────────────────────────────────────────
@@ -1935,6 +1990,7 @@ panel_submenu_manage() {
     echo -e "  ${BOLD}9)${RESET} 🔓  Открыть порт 8443"
     echo -e " ${BOLD}10)${RESET} 🔐  Закрыть порт 8443"
     echo -e " ${BOLD}11)${RESET} 💻  Remnawave CLI"
+    echo -e " ${BOLD}12)${RESET} 🔧  Переустановить скрипт (rp)"
     echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
@@ -1951,6 +2007,7 @@ panel_submenu_manage() {
         9)  "$PANEL_MGMT_SCRIPT" open_port ;;
         10) "$PANEL_MGMT_SCRIPT" close_port ;;
         11) panel_cli ;;
+        12) panel_reinstall_mgmt || true; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
         0)  return ;;
         *)  warn "Неверный выбор" ;;
     esac
