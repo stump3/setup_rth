@@ -13,7 +13,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-SCRIPT_VERSION="v2603.172335"  # build: 2026-03-17 23:35 UTC
+SCRIPT_VERSION=$(date -r "$0" +'v%y%m.%d%H%M' 2>/dev/null || echo "v0000.000000")
 
 # ═══════════════════════════════════════════════════════════════════
 # ЦВЕТА И ОБЩИЕ УТИЛИТЫ
