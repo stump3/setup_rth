@@ -1,3 +1,11 @@
+<div align="center">
+
+> 📖 **[Открыть интерактивную документацию](https://stump3.github.io/setup_rth/README.html)** — тёмная тема, навигация, терминальные превью
+
+</div>
+
+---
+
 # 🛠️ setup.sh — Unified Server Management
 
 > Единый скрипт установки и управления VPN-инфраструктурой.  
@@ -78,9 +86,42 @@ VPN-панель управления. Архитектура eGames: nginx в `
 | Домен подписок | sub.example.com | Для клиентских конфигов |
 | Домен selfsteal | node.example.com | Для Reality |
 | Метод SSL | 1 / 2 / 3 | Cloudflare / ACME standalone / Gcore |
+| Логин суперадмина | авто | Случайные 8 букв `[a-zA-Z]{8}`, генерируется автоматически |
+| Пароль суперадмина | авто | Случайный, генерируется автоматически |
 
-> ⚠️ **Сохраните URL с cookie-ключом.** Без него войти в панель невозможно.  
+> ⚠️ **Сохраните логин, пароль и URL с cookie-ключом.** Логин и пароль генерируются автоматически — восстановить их нельзя. Без cookie-URL войти в панель невозможно.  
 > `https://panel.example.com/auth/login?KEY=VAL`
+
+### Как работает cookie-защита
+
+Nginx защищает панель двумя случайными словами, которые генерируются при установке:
+
+- **KEY** — имя cookie и query-параметра (`[a-zA-Z]{8}`, например `xKtBpWnR`)
+- **VAL** — значение cookie (`[a-zA-Z]{8}`, например `mQaYjZvL`)
+
+При первом переходе по URL `?KEY=VAL` nginx выставляет cookie через `Set-Cookie` со сроком жизни 1 год. После этого браузер предъявляет её при каждом запросе и URL больше не нужен.
+
+```nginx
+# Как это выглядит в nginx.conf:
+map $http_cookie $auth_cookie {
+    default 0;
+    "~*xKtBpWnR=mQaYjZvL" 1;   # ← авторизован по cookie
+}
+map $arg_xKtBpWnR $auth_query {
+    default 0;
+    "mQaYjZvL" 1;               # ← авторизован по query-параметру
+}
+map "$auth_cookie$auth_query" $authorized {
+    "~1" 1;   # хотя бы одно из двух совпало
+    default 0;
+}
+```
+
+> Если URL потерян — используйте `rp open_port`, чтобы открыть прямой доступ на порт 8443 без cookie-проверки. Потом восстановите URL из `nginx.conf`:
+> ```bash
+> grep -A2 "map \$arg_" /opt/remnawave/nginx.conf | head -4
+> # Первый аргумент — KEY, значение в кавычках — VAL
+> ```
 
 ### Команды управления (`rp`)
 
