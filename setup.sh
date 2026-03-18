@@ -3339,7 +3339,7 @@ main_menu() {
     clear
     echo -e "${PURPLE}  ╔══════════════════════════════════════════════════════════╗"
     echo -e "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
-    echo -e "  ║                                          ${GRAY}${SCRIPT_VERSION}${PURPLE}  ║"
+    echo -e "  ║                                          ${CYAN}${SCRIPT_VERSION}${PURPLE}  ║"
     echo -e "  ╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
