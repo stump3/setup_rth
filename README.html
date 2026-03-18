@@ -259,17 +259,17 @@ td:first-child{font-family:var(--mono);font-size:12.5px;color:var(--cyan);white-
   <div class="term">
     <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">setup.sh</div></div>
     <div class="term-body">
-<span class="td">  ╔══════════════════════════════════════════════════════════╗</span><br>
-<span class="td">  ║ </span><span class="tw">🛠️  SERVER SETUP — Unified Management</span><span class="td">                  ║</span><br>
-<span class="td">  ╚══════════════════════════════════════════════════════════╝</span><br><br>
-<span class="td">  Remnawave Panel:  </span><span class="tg">● установлена</span><br>
-<span class="td">  MTProxy (telemt): </span><span class="tg">● запущен (systemd)</span><br>
-<span class="td">  Hysteria2:        </span><span class="tr">○ не установлена</span><br><br>
-<span class="td">  </span><span class="tw">1)</span><span class="tb"> 🛡️  Remnawave Panel</span><br>
-<span class="td">  </span><span class="tw">2)</span><span class="tp"> 📡  MTProxy (telemt)</span><br>
-<span class="td">  </span><span class="tw">3)</span><span class="tc"> 🚀  Hysteria2</span><br>
-<span class="td">  </span><span class="tw">4)</span><span class="ty"> 📦  Перенос</span><br>
-<span class="td">  </span><span class="tw">0)</span><span class="tr"> Выход</span>
+<span class="tb">  SERVER-MANAGER</span><span class="td">  v2603.172335</span><br>
+<span class="td">  ────────────────────────────────────────────</span><br><br>
+<span class="td">  Remnawave Panel  </span><span class="tg">●</span><span class="tw"> запущена  </span><span class="td">v2.4.1</span><br>
+<span class="td">  MTProxy (telemt) </span><span class="tg">●</span><span class="tw"> запущен (systemd)</span><br>
+<span class="td">  Hysteria2        </span><span class="tr">○ не установлена</span><br><br>
+<span class="td">  ────────────────────────────────────────────</span><br><br>
+<span class="tw">  1)</span><span class="tb">  🛡️   Remnawave Panel</span><br>
+<span class="tw">  2)</span><span class="tp">  📡  MTProxy (telemt)</span><br>
+<span class="tw">  3)</span><span class="tc">  🚀  Hysteria2</span><br>
+<span class="tw">  4)</span><span class="ty">  📦  Перенос</span><br><br>
+<span class="tw">  0)</span><span class="td">  Выход</span>
     </div>
   </div>
 
@@ -594,7 +594,7 @@ map <span class="cs">"$auth_cookie$auth_query"</span> $authorized {
   <h3>Результат установки</h3>
   <div class="code-block">
     <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">URI</span></div>
-    <pre>hy2://Login:Pass@cdn.example.com:8443?sni=cdn.example.com&amp;alpn=h3&amp;insecure=0#Germany Hysteria2</pre>
+    <pre>hy2://Login:<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="56063725251635323878332e373b263a337835393b">[email&#160;protected]</a>:8443?sni=cdn.example.com&amp;alpn=h3&amp;insecure=0#Germany Hysteria2</pre>
   </div>
 
   <p>Файлы сохраняются в <code>/root/</code>:</p>
@@ -610,6 +610,32 @@ map <span class="cs">"$auth_cookie$auth_query"</span> $authorized {
     </table>
   </div>
 </section>
+
+
+  <h3>Подменю</h3>
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">Hysteria2</div></div>
+    <div class="term-body">
+<span class="tw">  1)</span><span class="tc">  🔧  Установка</span><br>
+<span class="tw">  2)</span><span class="tc">  ⚙️   Управление</span><br>
+<span class="tw">  3)</span><span class="tc">  👥  Пользователи</span><br>
+<span class="tw">  4)</span><span class="tc">  🔗  Подписка</span><br>
+<span class="tw">  5)</span><span class="tc">  📦  Миграция на другой сервер</span><br><br>
+<span class="tw">  0)</span><span class="td">  ◀️   Назад</span>
+    </div>
+  </div>
+
+  <h3>Интеграция с Remnawave (пункт 4 → 3)</h3>
+  <p>Webhook-сервис синхронизирует пользователей Hysteria2 с Remnawave в реальном времени. Форк subscription-page автоматически добавляет <code>hy2://</code> URI в ответ подписки.</p>
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">Hysteria2 → Подписка</div></div>
+    <div class="term-body">
+<span class="tw">  1)</span><span class="tc">  📤  Опубликовать подписку</span><br>
+<span class="tw">  2)</span><span class="tc">  🔗  Объединить с подпиской Remnawave (merger)</span><br>
+<span class="tw">  3)</span><span class="tc">  🪝  Интеграция с Remnawave (webhook + sub-page)</span><br><br>
+<span class="tw">  0)</span><span class="td">  ◀️   Назад</span>
+    </div>
+  </div>
 
 <div class="divider"></div>
 
@@ -826,7 +852,7 @@ ssh root@NEW_IP systemctl restart hysteria-server</pre>
 </main>
 </div>
 
-<script>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
 function copyCmd(){
   navigator.clipboard.writeText(document.getElementById('install-cmd').textContent);
   const btn=document.querySelector('.copy-btn');
@@ -840,12 +866,4 @@ const obs=new IntersectionObserver(entries=>{
   entries.forEach(e=>{
     if(e.isIntersecting){
       links.forEach(l=>l.classList.remove('active'));
-      const a=document.querySelector(`.nav-link[href="#${e.target.id}"]`);
-      if(a)a.classList.add('active')
-    }
-  })
-},{threshold:.25,rootMargin:'-60px 0px -60% 0px'});
-sections.forEach(s=>obs.observe(s));
-</script>
-</body>
-</html>
+      c
