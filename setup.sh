@@ -1148,18 +1148,37 @@ MGMTEOF
     ok "Команда 'remnawave_panel' (rp) создана"
 }
 
+
+get_remnawave_version() {
+    docker logs remnawave 2>/dev/null | grep -o "Remnawave Backend v[0-9.]*" | tail -1 | grep -o "v[0-9.]*" || echo ""
+}
+
+get_telemt_version() {
+    "$TELEMT_BIN" --version 2>/dev/null | awk '{print $2}' | head -1 || echo ""
+}
+
+get_hysteria_version() {
+    /usr/local/bin/hysteria version 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo ""
+}
+
 panel_menu() {
-    header "Remnawave Panel"
-    echo -e "  ${BOLD}1)${RESET} Установить"
-    echo -e "  ${BOLD}2)${RESET} Управление (remnawave_panel)"
-    echo -e "  ${BOLD}0)${RESET} Назад"
+    local ver; ver=$(get_remnawave_version)
+    local ver_str="${ver:+${CYAN}${ver}${NC}}"
     echo ""
-    local ch
-    read -rp "Выбор: " ch
+    echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}  ║  🛡️  Remnawave Panel  ${ver_str}${PURPLE}$(printf '%*s' $((20 - ${#ver})) '')║${NC}"
+    echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
+    echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
+    echo -e "  ${BOLD}3)${RESET} 📦  Миграция на другой сервер"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
     case "$ch" in
         1) panel_install ;;
-        2) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT" \
-            || warn "Панель не установлена. Сначала выполните установку." ;;
+        2) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT"             || warn "Панель не установлена. Сначала выполните установку." ;;
+        3) [ -x "$PANEL_MGMT_SCRIPT" ] && "$PANEL_MGMT_SCRIPT" migrate             || warn "Панель не установлена." ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
@@ -1799,37 +1818,72 @@ for u in users:
 
 telemt_main_menu() {
     local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
-    header "telemt MTProxy [${mode_label}]"
-    echo -e "  ${BOLD}1)${RESET} Установить"
-    echo -e "  ${BOLD}2)${RESET} Добавить пользователя"
-    echo -e "  ${BOLD}3)${RESET} Удалить пользователя"
-    echo -e "  ${BOLD}4)${RESET} Пользователи и ссылки"
-    echo -e "  ${BOLD}5)${RESET} Статус и логи"
-    echo -e "  ${BOLD}6)${RESET} Обновить"
-    echo -e "  ${BOLD}7)${RESET} Остановить"
-    echo -e "  ${BOLD}8)${RESET} Мигрировать на новый сервер"
-    echo -e "  ${BOLD}9)${RESET} Сменить режим (systemd ↔ Docker)"
-    echo -e "  ${BOLD}0)${RESET} Назад"
+    local ver; ver=$(get_telemt_version)
+    local ver_str="${ver:+${CYAN}${ver}${NC}}"
     echo ""
-    local ch; read -rp "Выбор: " ch
+    echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}  ║  📡  MTProxy (telemt)  ${ver_str}${PURPLE}$(printf '%*s' $((16 - ${#ver})) '')║${NC}"
+    echo -e "${PURPLE}  ║  ${GRAY}${mode_label}${PURPLE}$(printf '%*s' $((40 - ${#mode_label})) '')║${NC}"
+    echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
+    echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
+    echo -e "  ${BOLD}3)${RESET} 👥  Пользователи"
+    echo -e "  ${BOLD}4)${RESET} 📦  Миграция на другой сервер"
+    echo -e "  ${BOLD}5)${RESET} 🔀  Сменить режим (systemd ↔ Docker)"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
     case "$ch" in
         1) telemt_menu_install ;;
-        2) telemt_menu_add_user ;;
-        3) telemt_menu_delete_user ;;
-        4) telemt_menu_links ;;
-        5) telemt_menu_status ;;
-        6) telemt_menu_update ;;
-        7) telemt_menu_stop ;;
-        8) if [ "$TELEMT_MODE" = "systemd" ]; then
+        2) telemt_submenu_manage ;;
+        3) telemt_submenu_users ;;
+        4) if [ "$TELEMT_MODE" = "systemd" ]; then
                telemt_menu_migrate
            else
                telemt_menu_migrate_docker
            fi ;;
-        9) telemt_choose_mode; telemt_check_deps ;;
+        5) telemt_choose_mode; telemt_check_deps ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
     telemt_main_menu
+}
+
+telemt_submenu_manage() {
+    header "MTProxy — Управление"
+    echo -e "  ${BOLD}1)${RESET} 📊  Статус и логи"
+    echo -e "  ${BOLD}2)${RESET} 🔄  Обновить"
+    echo -e "  ${BOLD}3)${RESET} ⏹️   Остановить"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) telemt_menu_status; read -rp "Enter..." < /dev/tty ;;
+        2) telemt_menu_update ;;
+        3) telemt_menu_stop; read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    telemt_submenu_manage
+}
+
+telemt_submenu_users() {
+    header "MTProxy — Пользователи"
+    echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
+    echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
+    echo -e "  ${BOLD}3)${RESET} 👥  Пользователи и ссылки"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) telemt_menu_add_user ;;
+        2) telemt_menu_delete_user ;;
+        3) telemt_menu_links; read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    telemt_submenu_users
 }
 
 telemt_section() {
@@ -3239,45 +3293,90 @@ SVCEOF
 
 
 hysteria_menu() {
-    header "Hysteria2"
-    local inst_status
-    if hy_is_running; then
-        inst_status="${GREEN}● запущена${NC}"
-    elif hy_is_installed; then
-        inst_status="${YELLOW}◐ остановлена${NC}"
-    else
-        inst_status="${GRAY}○ не установлена${NC}"
-    fi
-    echo -e "  Hysteria2: $(echo -e "$inst_status")"
+    local ver; ver=$(get_hysteria_version)
+    local ver_str="${ver:+${CYAN}${ver}${NC}}"
+    local dom port
+    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -- '- ' | head -1 | tr -d ' -' || echo "")
+    port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "")
     echo ""
-    echo -e "  ${BOLD}1)${RESET} Установить"
-    echo -e "  ${BOLD}2)${RESET} Статус"
-    echo -e "  ${BOLD}3)${RESET} Логи"
-    echo -e "  ${BOLD}4)${RESET} Перезапустить"
-    echo -e "  ${BOLD}5)${RESET} Добавить пользователя"
-    echo -e "  ${BOLD}6)${RESET} Удалить пользователя"
-    echo -e "  ${BOLD}7)${RESET} Пользователи и ссылки"
-    echo -e "  ${BOLD}8)${RESET} Опубликовать подписку"
-    echo -e "  ${BOLD}9)${RESET} Объединить с подпиской Remnawave"
-    echo -e " ${BOLD}10)${RESET} Перенести на другой сервер"
-    echo -e "  ${BOLD}0)${RESET} Назад"
+    echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}  ║  🚀  Hysteria2  ${ver_str}${PURPLE}$(printf '%*s' $((23 - ${#ver})) '')║${NC}"
+    if [ -n "$dom" ]; then
+        local info="${dom}${port:+ : $port}"
+        echo -e "${PURPLE}  ║  ${GRAY}${info}${PURPLE}$(printf '%*s' $((40 - ${#info})) '')║${NC}"
+    fi
+    echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
+    echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
+    echo -e "  ${BOLD}3)${RESET} 👥  Пользователи"
+    echo -e "  ${BOLD}4)${RESET} 🔗  Подписка"
+    echo -e "  ${BOLD}5)${RESET} 📦  Миграция на другой сервер"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
     echo ""
     local ch; read -rp "Выбор: " ch < /dev/tty
     case "$ch" in
         1) hysteria_install ;;
-        2) hysteria_status; read -rp "Enter..." < /dev/tty ;;
-        3) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
-        4) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
-        5) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
-        6) hysteria_delete_user; read -rp "Enter..." < /dev/tty ;;
-        7) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
-        8) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
-        9) hysteria_setup_merger; read -rp "Enter..." < /dev/tty ;;
-        10) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
+        2) hysteria_submenu_manage ;;
+        3) hysteria_submenu_users ;;
+        4) hysteria_submenu_sub ;;
+        5) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
     esac
     hysteria_menu
+}
+
+hysteria_submenu_manage() {
+    header "Hysteria2 — Управление"
+    echo -e "  ${BOLD}1)${RESET} 📊  Статус"
+    echo -e "  ${BOLD}2)${RESET} 📋  Логи"
+    echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) hysteria_status; read -rp "Enter..." < /dev/tty ;;
+        2) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
+        3) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    hysteria_submenu_manage
+}
+
+hysteria_submenu_users() {
+    header "Hysteria2 — Пользователи"
+    echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
+    echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
+    echo -e "  ${BOLD}3)${RESET} 👥  Пользователи и ссылки"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
+        2) hysteria_delete_user; read -rp "Enter..." < /dev/tty ;;
+        3) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    hysteria_submenu_users
+}
+
+hysteria_submenu_sub() {
+    header "Hysteria2 — Подписка"
+    echo -e "  ${BOLD}1)${RESET} 📤  Опубликовать подписку"
+    echo -e "  ${BOLD}2)${RESET} 🔗  Объединить с подпиской Remnawave"
+    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo ""
+    local ch; read -rp "Выбор: " ch < /dev/tty
+    case "$ch" in
+        1) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
+        2) hysteria_setup_merger; read -rp "Enter..." < /dev/tty ;;
+        0) return ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    hysteria_submenu_sub
 }
 
 
