@@ -1376,19 +1376,19 @@ case "$1" in
     "")
         while true; do
             show_menu
-            read -p "Выбор: " ch</dev/tty
+            read -p "  Выбор: " ch < /dev/tty
             case $ch in
-                1) read -p "  Логи (panel/nginx/sub/node) [panel]: " s</dev/tty; do_logs "${s:-panel}" ;;
-                2) do_status; read -p "Enter..."</dev/tty ;;
-                3) read -p "  Что перезапустить? [all]: " s</dev/tty; do_restart "${s:-all}"; read -p "Enter..."</dev/tty ;;
-                4) cd /opt/remnawave && docker compose up -d; _ok "Запущено"; read -p "Enter..."</dev/tty ;;
-                5) do_update; read -p "Enter..."</dev/tty ;;
-                6) do_ssl; read -p "Enter..."</dev/tty ;;
-                7) do_backup; read -p "Enter..."</dev/tty ;;
-                8) do_health; read -p "Enter..."</dev/tty ;;
-                9) do_open_port; read -p "Enter..."</dev/tty ;;
-               10) do_close_port; read -p "Enter..."</dev/tty ;;
-               11) do_migrate; read -p "Enter..."</dev/tty ;;
+                1) read -p "  Логи (panel/nginx/sub/node) [panel]: " s < /dev/tty; do_logs "${s:-panel}" ;;
+                2) do_status; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                3) read -p "  Что перезапустить? [all]: " s < /dev/tty; do_restart "${s:-all}"; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                4) cd /opt/remnawave && docker compose up -d; _ok "Запущено"; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                5) do_update; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                6) do_ssl; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                7) do_backup; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                8) do_health; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                9) do_open_port; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+               10) do_close_port; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+               11) do_migrate; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
                 q|Q) exit 0 ;;
                 *) sleep 0.3 ;;
             esac
