@@ -1163,10 +1163,9 @@ get_hysteria_version() {
 
 panel_menu() {
     local ver; ver=$(get_remnawave_version)
-    local ver_str="${ver:+${CYAN}${ver}${NC}}"
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    echo -e "${PURPLE}  ║  🛡️  Remnawave Panel  ${ver_str}${PURPLE}$(printf '%*s' $((20 - ${#ver})) '')║${NC}"
+    printf "${PURPLE}  ║  🛡️  Remnawave Panel  ${CYAN}%-12s${PURPLE}       ║${NC}\n" "${ver}"
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
@@ -1819,11 +1818,10 @@ for u in users:
 telemt_main_menu() {
     local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
     local ver; ver=$(get_telemt_version)
-    local ver_str="${ver:+${CYAN}${ver}${NC}}"
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    echo -e "${PURPLE}  ║  📡  MTProxy (telemt)  ${ver_str}${PURPLE}$(printf '%*s' $((16 - ${#ver})) '')║${NC}"
-    echo -e "${PURPLE}  ║  ${GRAY}${mode_label}${PURPLE}$(printf '%*s' $((40 - ${#mode_label})) '')║${NC}"
+    printf "${PURPLE}  ║  📡  MTProxy (telemt)  ${CYAN}%-12s${PURPLE}     ║${NC}\n" "${ver}"
+    printf "${PURPLE}  ║  ${GRAY}%-40s${PURPLE}║${NC}\n" "${mode_label}"
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
@@ -3294,16 +3292,15 @@ SVCEOF
 
 hysteria_menu() {
     local ver; ver=$(get_hysteria_version)
-    local ver_str="${ver:+${CYAN}${ver}${NC}}"
     local dom port
     dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -- '- ' | head -1 | tr -d ' -' || echo "")
     port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "")
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    echo -e "${PURPLE}  ║  🚀  Hysteria2  ${ver_str}${PURPLE}$(printf '%*s' $((23 - ${#ver})) '')║${NC}"
+    printf "${PURPLE}  ║  🚀  Hysteria2  ${CYAN}%-18s${PURPLE}       ║${NC}\n" "${ver}"
     if [ -n "$dom" ]; then
         local info="${dom}${port:+ : $port}"
-        echo -e "${PURPLE}  ║  ${GRAY}${info}${PURPLE}$(printf '%*s' $((40 - ${#info})) '')║${NC}"
+        printf "${PURPLE}  ║  ${GRAY}%-40s${PURPLE}║${NC}\n" "${info}"
     fi
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
     echo ""
