@@ -1404,11 +1404,13 @@ MGMTEOF
 
 
 get_remnawave_version() {
-    # docker inspect (9ms) значительно быстрее docker logs (57ms)
     local v
+    # 1. Пробуем label (быстро, но часто не задан)
     v=$(docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' remnawave 2>/dev/null || true)
-    # Fallback: docker ps image tag если label не задан
-    [ -z "$v" ] && v=$(docker ps --format '{{.Image}}' -f name=remnawave 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    # 2. Точный фильтр по имени контейнера — исключает remnawave-redis/db/nginx
+    [ -z "$v" ] && v=$(docker inspect --format='{{.Config.Image}}' remnawave 2>/dev/null         | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    # 3. Fallback: первые 50 строк логов — версия пишется при старте
+    [ -z "$v" ] && v=$(docker logs --tail=50 remnawave 2>/dev/null         | grep -o "Remnawave Backend v[0-9.]*" | tail -1         | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" || true)
     echo "${v:-}"
 }
 
@@ -4127,68 +4129,51 @@ panel_backup_restore() {
 _STATUS_CACHE="/tmp/.sm_status_$$"
 
 _main_menu_refresh_status() {
-    # Разделено на две части:
-    # 1. Быстрая — systemctl + файлы (мгновенно, блокирующая)
-    # 2. Медленная — docker ps + версии (в фоне, неблокирующая)
+    # Собираем все данные за один вызов docker ps (7ms с точным фильтром)
+    # Синхронно — версии видны сразу при входе и после возврата из подменю
+    local rw_ver hy_ver ps_out
 
-    # ── Быстрая часть ───────────────────────────────────────────
+    # docker ps один раз для всех контейнеров (~10ms)
+    ps_out=$(docker ps --format "{{.Names}}" 2>/dev/null || true)
+
+    # Версии параллельно через temp-файлы (~15ms вместо 30ms последовательно)
+    local _f_rw _f_hy
+    _f_rw=$(mktemp /tmp/.sm_rw_XXXX); _f_hy=$(mktemp /tmp/.sm_hy_XXXX)
+    { get_remnawave_version 2>/dev/null > "$_f_rw"; } &
+    { get_hysteria_version  2>/dev/null > "$_f_hy"; } &
+    wait
+    rw_ver=$(cat "$_f_rw" 2>/dev/null || true)
+    hy_ver=$(cat "$_f_hy" 2>/dev/null || true)
+    rm -f "$_f_rw" "$_f_hy"
+
+    # ── Remnawave Panel ──────────────────────────────────────────
+    if echo "$ps_out" | grep -q "^remnawave$"; then
+        _PANEL_STATUS="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
+    elif [ -d /opt/remnawave ]; then
+        _PANEL_STATUS="${YELLOW}◐${NC} остановлена"
+    else
+        _PANEL_STATUS="${GRAY}○ не установлена${NC}"
+    fi
+
+    # ── MTProxy ──────────────────────────────────────────────────
     if systemctl is-active --quiet telemt 2>/dev/null; then
         _TELEMT_STATUS="${GREEN}●${NC} запущен (systemd)"
+    elif echo "$ps_out" | grep -q "^telemt$"; then
+        _TELEMT_STATUS="${GREEN}●${NC} запущен (Docker)"
     elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
         _TELEMT_STATUS="${YELLOW}◐${NC} остановлен"
     else
         _TELEMT_STATUS="${GRAY}○ не установлен${NC}"
     fi
 
+    # ── Hysteria2 ────────────────────────────────────────────────
     if hy_is_running 2>/dev/null; then
-        _HYSTERIA_STATUS="${GREEN}●${NC} запущена"
+        _HYSTERIA_STATUS="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
     elif hy_is_installed 2>/dev/null; then
         _HYSTERIA_STATUS="${YELLOW}◐${NC} остановлена"
     else
         _HYSTERIA_STATUS="${GRAY}○ не установлена${NC}"
     fi
-
-    if [ -d /opt/remnawave ]; then
-        _PANEL_STATUS="${YELLOW}◐${NC} остановлена"
-    else
-        _PANEL_STATUS="${GRAY}○ не установлена${NC}"
-    fi
-
-    # ── Медленная часть — в фоне ─────────────────────────────────
-    {
-        local rw_ver hy_ver ps_out
-        rw_ver=$(get_remnawave_version 2>/dev/null || true)   # 9ms (docker inspect)
-        hy_ver=$(get_hysteria_version 2>/dev/null || true)    # 15ms (binary)
-        ps_out=$(docker ps --format "{{.Names}}" 2>/dev/null || true) # 15ms
-
-        local p_status t_status h_status
-        if echo "$ps_out" | grep -q "^remnawave$"; then
-            p_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
-        elif [ -d /opt/remnawave ]; then
-            p_status="${YELLOW}◐${NC} остановлена"
-        else
-            p_status="${GRAY}○ не установлена${NC}"
-        fi
-
-        if echo "$ps_out" | grep -q "^telemt$"; then
-            t_status="${GREEN}●${NC} запущен (Docker)"
-        fi
-
-        if hy_is_running 2>/dev/null; then
-            h_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
-        elif hy_is_installed 2>/dev/null; then
-            h_status="${YELLOW}◐${NC} остановлена"
-        else
-            h_status="${GRAY}○ не установлена${NC}"
-        fi
-
-        # Сохраняем в кэш-файл
-        printf "%s
-%s
-%s
-" "$p_status" "${t_status:-}" "$h_status" > "${_STATUS_CACHE}" 2>/dev/null
-    } &
-    disown 2>/dev/null || true
 }
 
 _main_menu_load_cache() {
@@ -4206,13 +4191,9 @@ _main_menu_load_cache() {
 }
 
 main_menu() {
-    # Инициализируем статус (быстрая часть) + запускаем фоновое обновление
-    _PANEL_STATUS="${GRAY}○ ...${NC}"
-    _TELEMT_STATUS="${GRAY}○ ...${NC}"
-    _HYSTERIA_STATUS="${GRAY}○ ...${NC}"
+    # Загружаем статусы и версии синхронно при входе
     _main_menu_refresh_status
     while true; do
-        _main_menu_load_cache  # Подхватываем результат фонового обновления если готов
         clear
         echo ""
         echo -e "${BOLD}${PURPLE}  SERVER-MANAGER${NC}${GRAY}  ${SCRIPT_VERSION}${NC}"
