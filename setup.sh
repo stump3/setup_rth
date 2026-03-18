@@ -1163,10 +1163,15 @@ get_hysteria_version() {
 
 panel_menu() {
     local ver; ver=$(get_remnawave_version)
+    local panel_domain=""
+    [ -f /opt/remnawave/.env ] && panel_domain=$(grep "^FRONT_END_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"' || true)
+    clear
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    printf "${PURPLE}  ║  🛡️  Remnawave Panel  ${CYAN}%-12s${PURPLE}       ║${NC}\n" "${ver}"
+    echo -e "${PURPLE}  ║  🛡️  Remnawave Panel                    ║${NC}"
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
+    [ -n "$ver" ] && echo -e "  ${GRAY}Версия: ${CYAN}${ver}${NC}"
+    [ -n "$panel_domain" ] && echo -e "  ${GRAY}Домен:  ${CYAN}${panel_domain}${NC}"
     echo ""
     echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
     echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
@@ -1818,11 +1823,15 @@ for u in users:
 telemt_main_menu() {
     local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
     local ver; ver=$(get_telemt_version)
+    local telemt_port=""
+    [ -f "$TELEMT_CONFIG_FILE" ] && telemt_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1 || true)
+    clear
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    printf "${PURPLE}  ║  📡  MTProxy (telemt)  ${CYAN}%-12s${PURPLE}     ║${NC}\n" "${ver}"
-    printf "${PURPLE}  ║  ${GRAY}%-40s${PURPLE}║${NC}\n" "${mode_label}"
+    echo -e "${PURPLE}  ║  📡  MTProxy (telemt)                   ║${NC}"
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
+    [ -n "$ver" ] && echo -e "  ${GRAY}Версия: ${CYAN}${ver}${NC}   ${GRAY}Режим: ${CYAN}${mode_label}${NC}"
+    [ -n "$telemt_port" ] && echo -e "  ${GRAY}Порт:   ${CYAN}${telemt_port}${NC}"
     echo ""
     echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
     echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
@@ -1849,6 +1858,7 @@ telemt_main_menu() {
 }
 
 telemt_submenu_manage() {
+    clear
     header "MTProxy — Управление"
     echo -e "  ${BOLD}1)${RESET} 📊  Статус и логи"
     echo -e "  ${BOLD}2)${RESET} 🔄  Обновить"
@@ -1867,6 +1877,7 @@ telemt_submenu_manage() {
 }
 
 telemt_submenu_users() {
+    clear
     header "MTProxy — Пользователи"
     echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
     echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
@@ -3295,18 +3306,16 @@ hysteria_menu() {
     local dom port
     dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -- '- ' | head -1 | tr -d ' -' || echo "")
     port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "")
+    clear
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    printf "${PURPLE}  ║  🚀  Hysteria2  ${CYAN}%-18s${PURPLE}       ║${NC}\n" "${ver}"
+    echo -e "${PURPLE}  ║  🚀  Hysteria2                          ║${NC}"
+    echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
+    [ -n "$ver" ] && echo -e "  ${GRAY}Версия: ${CYAN}${ver}${NC}"
     if [ -n "$dom" ]; then
         local info="${dom}${port:+ : $port}"
-        # Обрезаем если слишком длинный
-        if [ ${#info} -gt 38 ]; then
-            info="${info:0:35}..."
-        fi
-        printf "${PURPLE}  ║  ${GRAY}%-40s${PURPLE}║${NC}\n" "${info}"
+        echo -e "  ${GRAY}Сервер: ${CYAN}${info}${NC}"
     fi
-    echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
     echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
@@ -3329,6 +3338,7 @@ hysteria_menu() {
 }
 
 hysteria_submenu_manage() {
+    clear
     header "Hysteria2 — Управление"
     echo -e "  ${BOLD}1)${RESET} 📊  Статус"
     echo -e "  ${BOLD}2)${RESET} 📋  Логи"
@@ -3347,6 +3357,7 @@ hysteria_submenu_manage() {
 }
 
 hysteria_submenu_users() {
+    clear
     header "Hysteria2 — Пользователи"
     echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
     echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
@@ -3365,6 +3376,7 @@ hysteria_submenu_users() {
 }
 
 hysteria_submenu_sub() {
+    clear
     header "Hysteria2 — Подписка"
     echo -e "  ${BOLD}1)${RESET} 📤  Опубликовать подписку"
     echo -e "  ${BOLD}2)${RESET} 🔗  Объединить с подпиской Remnawave"
