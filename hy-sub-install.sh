@@ -183,7 +183,8 @@ def update_hysteria_config(users):
         with open(HYSTERIA_CONFIG) as f: config = f.read()
         lines = ["  userpass:"]
         for u, p in users.items():
-            safe = re.sub(r'[^\w\-.]', '_', u)
+            safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', u)
+        if len(safe) < 6: safe = safe + '_' * (6 - len(safe))
             lines.append(f'    {safe}: "{p}"')
         new_block = "\n".join(lines)
         pattern = r'(\s*userpass:\s*\n(?:[ \t]+[^\n]+\n?)*)'
@@ -212,16 +213,17 @@ def process_event(payload):
     log.info(f"Событие: {event}, пользователь: {username}")
     users = load_users()
     changed = False
-    safe = re.sub(r'[^\w\-.]', '_', username)
+    safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', username)
+    if len(safe) < 6: safe = safe + '_' * (6 - len(safe))
     if event == "user.created":
         if safe not in users:
             users[safe] = gen_password(safe); changed = True
             log.info(f"Добавлен: {safe}")
-    elif event in ("user.deleted", "user.disabled"):
+    elif event in ("user.deleted", "user.disabled", "user.limited", "user.expired"):
         if safe in users:
             del users[safe]; changed = True
-            log.info(f"Удалён: {safe}")
-    elif event in ("user.enabled",):
+            log.info(f"Удалён/отключён: {safe}")
+    elif event in ("user.enabled", "user.traffic_reset"):
         if safe not in users:
             users[safe] = gen_password(safe); changed = True
             log.info(f"Восстановлен: {safe}")
@@ -243,7 +245,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers(); return
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
-        sig = self.headers.get("X-Webhook-Signature", "")
+        sig = self.headers.get("X-Remnawave-Signature", "")
         if WEBHOOK_SECRET and not verify_signature(body, sig):
             log.warning("Неверная подпись"); self.send_response(401); self.end_headers(); return
         try:
@@ -463,7 +465,7 @@ method = '''
             if (!userInfo.isOk || !userInfo.response) return null;
             const username = (userInfo.response as any).response?.username;
             if (!username) return null;
-            const safeUsername = username.replace(/[^\\w\\-.]/g, '_');
+            const safeUsername = username.replace(/[^a-zA-Z0-9_\-]/g, '_').padEnd(6, '_').slice(0, Math.max(6, username.replace(/[^a-zA-Z0-9_\-]/g, '_').length));
             const password = users[safeUsername] || users[username];
             if (!password) return null;
             return 'hy2://' + encodeURIComponent(safeUsername) + ':' + password +
@@ -498,7 +500,7 @@ method = '''
         try {
             const { data } = await this.axiosInstance.request({
                 method: 'GET',
-                url: 'api/users/get-by/short-uuid/' + shortUuid,
+                url: 'api/users/by-short-uuid/' + shortUuid,
                 headers: { 'x-remnawave-real-ip': clientIp },
             });
             return { isOk: true, response: data };

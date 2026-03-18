@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>hy-sub-install.sh — Документация</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Unbounded:wght@400;700;900&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0c0f;
+    --bg2: #0f1217;
+    --bg3: #151a22;
+    --border: #1e2630;
+    --border2: #263040;
+    --accent: #00d4ff;
+    --accent2: #7c3aed;
+    --accent3: #10b981;
+    --accent4: #f59e0b;
+    --accent5: #ef4444;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #475569;
+    --code-bg: #0d1117;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Manrope', sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .hero {
+    position: relative;
+    padding: 80px 40px 60px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -100px; left: 50%;
+    transform: translateX(-50%);
+    width: 600px; height: 400px;
+    background: radial-gradient(ellipse, rgba(0,212,255,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    border: 1px solid rgba(0,212,255,0.3);
+    padding: 4px 14px;
+    border-radius: 20px;
+    margin-bottom: 24px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    background: rgba(0,212,255,0.05);
+  }
+  .hero h1 {
+    font-family: 'Unbounded', sans-serif;
+    font-size: clamp(28px, 4vw, 50px);
+    font-weight: 900;
+    line-height: 1.1;
+    letter-spacing: -1px;
+    background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  .hero p { color: var(--text2); font-size: 16px; max-width: 580px; margin: 0 auto 40px; }
+  .hero-cmd {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--code-bg);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 14px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--accent3);
+  }
+  .hero-cmd .prompt { color: var(--text3); }
+  .copy-btn {
+    background: none;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    max-width: 1200px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 40px 24px;
+    border-right: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .nav-section { margin-bottom: 32px; }
+  .nav-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+    padding-left: 12px;
+  }
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    color: var(--text2);
+    text-decoration: none;
+    font-size: 13.5px;
+    font-weight: 500;
+    transition: all 0.15s;
+    margin-bottom: 2px;
+  }
+  .nav-link:hover { background: var(--bg3); color: var(--text); }
+  .nav-link.active { background: rgba(0,212,255,0.1); color: var(--accent); }
+  .nav-link .icon { font-size: 15px; }
+
+  .content { padding: 40px 48px 100px; max-width: 860px; }
+
+  .section { margin-bottom: 72px; scroll-margin-top: 24px; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 42px; height: 42px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+  .icon-blue   { background: rgba(0,212,255,0.1);   border: 1px solid rgba(0,212,255,0.2); }
+  .icon-purple { background: rgba(124,58,237,0.1);  border: 1px solid rgba(124,58,237,0.2); }
+  .icon-green  { background: rgba(16,185,129,0.1);  border: 1px solid rgba(16,185,129,0.2); }
+  .icon-amber  { background: rgba(245,158,11,0.1);  border: 1px solid rgba(245,158,11,0.2); }
+  .icon-red    { background: rgba(239,68,68,0.1);   border: 1px solid rgba(239,68,68,0.2); }
+
+  .section-title {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+
+  h3 {
+    font-family: 'Manrope', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 32px 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h3::before {
+    content: '';
+    width: 3px; height: 16px;
+    background: var(--accent);
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  p { color: var(--text2); margin-bottom: 16px; }
+
+  .code-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 16px 0;
+  }
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+  }
+  .code-dots { display: flex; gap: 6px; }
+  .code-dots span { width: 10px; height: 10px; border-radius: 50%; }
+  .dot-r { background: #ef4444; }
+  .dot-y { background: #f59e0b; }
+  .dot-g { background: #10b981; }
+  .code-lang {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  pre {
+    padding: 20px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: #a8d8ea;
+  }
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    background: rgba(0,212,255,0.07);
+    border: 1px solid rgba(0,212,255,0.15);
+    color: var(--accent);
+    padding: 2px 7px;
+    border-radius: 5px;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+
+  .comment { color: #4a5568; }
+  .str { color: #fbd38d; }
+  .kw { color: #c084fc; }
+  .fn { color: #68d391; }
+  .num { color: #f6ad55; }
+  .key { color: #00d4ff; }
+  .val { color: #fbd38d; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 16px 0;
+    border-radius: 10px;
+    border: 1px solid var(--border2);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border2); }
+  th {
+    padding: 12px 16px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+  td {
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text2);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  td:first-child {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+    margin: 20px 0;
+  }
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--border2); }
+  .card-icon { font-size: 28px; margin-bottom: 10px; }
+  .card-title { font-family: 'Unbounded', sans-serif; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .card-desc { font-size: 12.5px; color: var(--text2); line-height: 1.5; }
+
+  .alert {
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 16px 0;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    font-size: 14px;
+  }
+  .alert-warn    { background: rgba(245,158,11,0.07); border: 1px solid rgba(245,158,11,0.25); color: #fbd38d; }
+  .alert-info    { background: rgba(0,212,255,0.05);  border: 1px solid rgba(0,212,255,0.2);   color: #a8d8ea; }
+  .alert-danger  { background: rgba(239,68,68,0.06);  border: 1px solid rgba(239,68,68,0.2);   color: #fc8181; }
+  .alert-success { background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.2);  color: #68d391; }
+  .alert-icon { font-size: 18px; flex-shrink: 0; }
+
+  .steps { margin: 20px 0; }
+  .step-item { display: flex; gap: 16px; margin-bottom: 24px; }
+  .step-num {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: rgba(0,212,255,0.1);
+    border: 1px solid rgba(0,212,255,0.3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Unbounded', sans-serif;
+    font-size: 12px; font-weight: 700;
+    color: var(--accent);
+    flex-shrink: 0; margin-top: 2px;
+  }
+  .step-content { flex: 1; }
+  .step-title { font-weight: 700; color: var(--text); margin-bottom: 8px; }
+
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+    margin-left: 4px;
+  }
+  .badge-blue   { background: rgba(0,212,255,0.1);  color: var(--accent); border: 1px solid rgba(0,212,255,0.2); }
+  .badge-green  { background: rgba(16,185,129,0.1); color: #10b981;       border: 1px solid rgba(16,185,129,0.2); }
+  .badge-amber  { background: rgba(245,158,11,0.1); color: #f59e0b;       border: 1px solid rgba(245,158,11,0.2); }
+  .badge-red    { background: rgba(239,68,68,0.1);  color: #ef4444;       border: 1px solid rgba(239,68,68,0.2); }
+  .badge-purple { background: rgba(124,58,237,0.1); color: #a78bfa;       border: 1px solid rgba(124,58,237,0.2); }
+
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 20px 0;
+    padding: 20px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .flow-box {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    text-align: center;
+  }
+  .flow-box .label { color: var(--text3); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .flow-box .name { color: var(--text); font-size: 13px; }
+  .flow-arrow { color: var(--text3); font-size: 18px; }
+  .flow-box.active { border-color: rgba(0,212,255,0.4); background: rgba(0,212,255,0.05); }
+  .flow-box.active .name { color: var(--accent); }
+
+  .menu-preview {
+    background: #000;
+    border: 1px solid #1a2535;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 16px 0;
+  }
+  .menu-bar {
+    background: #111820;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #1a2535;
+  }
+  .menu-bar span { width: 10px; height: 10px; border-radius: 50%; }
+  .menu-bar .title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #4a5568;
+    margin-left: 8px;
+    flex: 1;
+    text-align: center;
+  }
+  .menu-content {
+    padding: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  .mc { color: #7c3aed; }
+  .mg { color: #10b981; }
+  .my { color: #f59e0b; }
+  .mr { color: #94a3b8; }
+  .mb { color: #00d4ff; }
+  .mw { color: #e2e8f0; }
+  .md { color: #4a5568; }
+
+  .divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border2), transparent); margin: 48px 0; }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+  @media (max-width: 768px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .content { padding: 24px 20px; }
+    .hero { padding: 48px 20px 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-badge">v1.0 · Hysteria2 + Remnawave</div>
+  <h1>hy-sub-install.sh</h1>
+  <p>Интеграция Hysteria2 в подписку Remnawave — автоматическая синхронизация пользователей через вебхуки и инъекция <code>hy2://</code> URI в subscription-page.</p>
+  <div class="hero-cmd">
+    <span class="prompt">$</span>
+    <span>bash hy-sub-install.sh</span>
+    <button class="copy-btn" onclick="navigator.clipboard.writeText('bash hy-sub-install.sh');this.textContent='✓';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+  </div>
+</div>
+
+<div class="layout">
+
+  <nav class="sidebar">
+    <div class="nav-section">
+      <div class="nav-label">Начало</div>
+      <a href="#overview" class="nav-link"><span class="icon">🗺</span> Обзор</a>
+      <a href="#requirements" class="nav-link"><span class="icon">📋</span> Требования</a>
+      <a href="#install" class="nav-link"><span class="icon">⚡</span> Установка</a>
+      <a href="#reinstall" class="nav-link"><span class="icon">↻</span> Переустановка</a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Архитектура</div>
+      <a href="#flow" class="nav-link"><span class="icon">🔄</span> Схема работы</a>
+      <a href="#webhook" class="nav-link"><span class="icon">🪝</span> Вебхук-сервис</a>
+      <a href="#subpage" class="nav-link"><span class="icon">📄</span> Форк sub-page</a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Справочник</div>
+      <a href="#events" class="nav-link"><span class="icon">📡</span> События</a>
+      <a href="#payload" class="nav-link"><span class="icon">📦</span> Структура payload</a>
+      <a href="#env" class="nav-link"><span class="icon">⚙️</span> Переменные среды</a>
+      <a href="#files" class="nav-link"><span class="icon">📁</span> Файлы и пути</a>
+      <a href="#troubleshoot" class="nav-link"><span class="icon">🔧</span> Диагностика</a>
+    </div>
+  </nav>
+
+  <main class="content">
+
+    <!-- ОБЗОР -->
+    <section class="section" id="overview">
+      <div class="section-header">
+        <div class="section-icon icon-blue">🗺</div>
+        <div class="section-title">Обзор</div>
+      </div>
+
+      <p>Скрипт решает две задачи: синхронизирует пользователей Remnawave с Hysteria2 в реальном времени и добавляет <code>hy2://</code> URI в ответ subscription-page, чтобы клиент (Clash/Sing-box и др.) получал Hysteria2 вместе с остальными прокси.</p>
+
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">🪝</div>
+          <div class="card-title">hy-webhook</div>
+          <div class="card-desc">Python-сервис на порту 8766. Слушает вебхуки Remnawave, обновляет конфиг Hysteria2 и перезапускает его.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">📄</div>
+          <div class="card-title">Форк sub-page</div>
+          <div class="card-desc">Патч TypeScript-бэкенда subscription-page. При запросе подписки дописывает <code>hy2://</code> URI в base64-ответ.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">🔄</div>
+          <div class="card-title">Авто-sync</div>
+          <div class="card-desc">При старте сервиса читает существующих пользователей из конфига Hysteria2 и сохраняет в БД без потери данных.</div>
+        </div>
+      </div>
+
+      <div class="alert alert-info">
+        <span class="alert-icon">ℹ️</span>
+        <div>Скрипт не затрагивает Remnawave Panel и Hysteria2 напрямую — только читает их конфиги и управляет блоком <code>userpass:</code> в <code>config.yaml</code>.</div>
+      </div>
+    </section>
+
+    <!-- ТРЕБОВАНИЯ -->
+    <section class="section" id="requirements">
+      <div class="section-header">
+        <div class="section-icon icon-amber">📋</div>
+        <div class="section-title">Требования</div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Компонент</th><th>Условие</th><th>Проверка</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Права</td>
+              <td>root</td>
+              <td><code>id -u</code> → 0</td>
+            </tr>
+            <tr>
+              <td>Remnawave Panel</td>
+              <td>Установлена в <code>/opt/remnawave</code></td>
+              <td><code>ls /opt/remnawave/.env</code></td>
+            </tr>
+            <tr>
+              <td>Hysteria2</td>
+              <td>Конфиг в <code>/etc/hysteria/config.yaml</code></td>
+              <td><code>systemctl status hysteria-server</code></td>
+            </tr>
+            <tr>
+              <td>Docker</td>
+              <td>Для сборки форка subscription-page</td>
+              <td><code>docker --version</code></td>
+            </tr>
+            <tr>
+              <td>Python 3</td>
+              <td>Для hy-webhook и патчей</td>
+              <td><code>python3 --version</code></td>
+            </tr>
+            <tr>
+              <td>Hysteria2 auth</td>
+              <td>В конфиге должен быть блок <code>auth: type: userpass</code></td>
+              <td><code>grep -A2 'auth:' /etc/hysteria/config.yaml</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Структура конфига Hysteria2</h3>
+      <p>Скрипт ожидает следующую структуру в <code>/etc/hysteria/config.yaml</code>:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">yaml</span></div>
+        <pre><span class="comment"># Домен — используется для автоопределения</span>
+tls:
+  domains:
+    - <span class="str">your.domain.com</span>
+
+<span class="comment"># Порт — из строки listen</span>
+listen: <span class="str">:8443</span>
+
+<span class="comment"># Auth — обязательный блок для скрипта</span>
+auth:
+  type: <span class="str">userpass</span>
+  userpass:
+    <span class="comment"># Сюда скрипт будет записывать пользователей</span></pre>
+      </div>
+    </section>
+
+    <!-- УСТАНОВКА -->
+    <section class="section" id="install">
+      <div class="section-header">
+        <div class="section-icon icon-green">⚡</div>
+        <div class="section-title">Установка</div>
+      </div>
+
+      <div class="steps">
+        <div class="step-item">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">Скачайте и запустите скрипт</div>
+            <div class="code-block">
+              <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">bash</span></div>
+              <pre>bash hy-sub-install.sh</pre>
+            </div>
+            <p>Скрипт проверит наличие Remnawave и Hysteria2, затем запустит интерактивную настройку.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">[1/6] Конфигурация</div>
+            <p>Скрипт автоматически определяет домен и порт из конфига Hysteria2. Зелёный маркер <span class="badge badge-green">авто</span> означает успешное чтение, жёлтый <span class="badge badge-amber">вручную</span> — потребуется ввод.</p>
+            <div class="menu-preview">
+              <div class="menu-bar"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#10b981"></span><div class="title">hy-sub-install.sh</div></div>
+              <div class="menu-content">
+<span class="mg">  ✓ </span><span class="mw">Домен</span><span class="md"> = your.domain.com  (авто)</span><br>
+<span class="mg">  ✓ </span><span class="mw">Порт</span><span class="md">  = 8443  (авто)</span><br>
+<br>
+<span class="mr">  Название подключения [🇩🇪 Germany Hysteria2]: </span><span class="mb">_</span><br>
+<span class="my">  ✎ </span><span class="mw">Название</span><span class="md"> = 🇩🇪 Germany Hysteria2  (вручную)</span><br>
+<span class="mb">  ⚙ </span><span class="mw">Webhook secret</span><span class="md"> = a3f8b2c1…  (сгенерировано)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">[2/6] → [6/6] Автоматические шаги</div>
+            <p>После ввода названия скрипт выполняет всё без остановок:</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Шаг</th><th>Действие</th></tr></thead>
+                <tbody>
+                  <tr><td>[2/6] Webhook сервис</td><td>Создаёт <code>/opt/hy-webhook/hy-webhook.py</code>, systemd-сервис, запускает</td></tr>
+                  <tr><td>[3/6] Синхронизация</td><td>Читает существующих пользователей из <code>config.yaml</code>, сохраняет в БД</td></tr>
+                  <tr><td>[4/6] Вебхуки Remnawave</td><td>Прописывает <code>WEBHOOK_ENABLED=true</code>, <code>WEBHOOK_URL</code>, <code>WEBHOOK_SECRET_HEADER</code> в <code>.env</code></td></tr>
+                  <tr><td>[5/6] Форк sub-page</td><td>Скачивает исходники, применяет TypeScript-патч, собирает Docker-образ</td></tr>
+                  <tr><td>[6/6] Docker Compose</td><td>Обновляет <code>docker-compose.yml</code>, перезапускает subscription-page</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="step-title">Финальный экран — сохраните secret!</div>
+            <div class="menu-preview">
+              <div class="menu-bar"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#10b981"></span><div class="title">Итог</div></div>
+              <div class="menu-content">
+<span class="mg">  ✅ Установка завершена!</span><br>
+<br>
+<span class="mw">  Статус сервисов</span><br>
+<span class="md">  ────────────────────────────</span><br>
+<span class="mg">  ✓</span>  hy-webhook<br>
+<span class="mg">  ✓</span>  hysteria-server<br>
+<span class="mg">  ✓</span>  subscription-page<br>
+<br>
+<span class="mw">  Конфигурация</span><br>
+<span class="md">  ────────────────────────────</span><br>
+<span class="md">  Домен    </span>your.domain.com<br>
+<span class="md">  Порт     </span>8443<br>
+<span class="md">  Название </span>🇩🇪 Germany Hysteria2<br>
+<br>
+<span class="my">  ⚠  Webhook secret — сохраните сейчас!</span><br>
+<span class="md">  ────────────────────────────</span><br>
+<span class="mb">  a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3</span>
+              </div>
+            </div>
+            <div class="alert alert-danger">
+              <span class="alert-icon">🔐</span>
+              <div>Webhook secret генерируется один раз и нигде не сохраняется после установки. Запишите его — он понадобится при переустановке в режиме <strong>«только webhook»</strong> для сохранения паролей пользователей.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ПЕРЕУСТАНОВКА -->
+    <section class="section" id="reinstall">
+      <div class="section-header">
+        <div class="section-icon icon-purple">↻</div>
+        <div class="section-title">Переустановка и обновление</div>
+      </div>
+
+      <p>При повторном запуске скрипт обнаруживает существующую установку и предлагает меню:</p>
+
+      <div class="menu-preview">
+        <div class="menu-bar"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#10b981"></span><div class="title">Режим переустановки</div></div>
+        <div class="menu-content">
+<span class="my">  ↻  Обнаружена существующая установка</span><br>
+<br>
+<span class="md">  hy-webhook:         </span><span class="mg">active</span><br>
+<span class="md">  Пользователей в БД: </span><span class="mw">12</span><br>
+<br>
+<span class="mw">  Что обновить?</span><br>
+<br>
+<span class="mw">  1)</span> Всё заново          <span class="md">— полная переустановка, новый secret</span><br>
+<span class="mw">  2)</span> Только webhook      <span class="md">— сервис + конфиг, secret сохранится</span><br>
+<span class="mw">  3)</span> Только subscription <span class="md">— пересборка Docker-образа форка</span><br>
+<span class="mw">  0)</span> Отмена
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Режим</th><th>Затронуто</th><th>Не затронуто</th><th>Secret</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>1 — Всё заново</td>
+              <td>Все 6 шагов</td>
+              <td>—</td>
+              <td><span class="badge badge-red">новый</span></td>
+            </tr>
+            <tr>
+              <td>2 — Только webhook</td>
+              <td>hy-webhook.py, hy-webhook.service</td>
+              <td>docker-compose.yml, subscription-page</td>
+              <td><span class="badge badge-green">сохраняется</span></td>
+            </tr>
+            <tr>
+              <td>3 — Только subscription</td>
+              <td>Docker-образ, docker-compose.yml</td>
+              <td>hy-webhook, пользователи, .env</td>
+              <td><span class="badge badge-green">не меняется</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="alert alert-warn">
+        <span class="alert-icon">⚠️</span>
+        <div>Режим <strong>1 (всё заново)</strong> генерирует новый secret. Старые пароли пользователей будут пересчитаны от нового secret — Hysteria2-подключения у всех существующих клиентов сбросятся. Они автоматически восстановятся при следующем обновлении подписки.</div>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- СХЕМА РАБОТЫ -->
+    <section class="section" id="flow">
+      <div class="section-header">
+        <div class="section-icon icon-blue">🔄</div>
+        <div class="section-title">Схема работы</div>
+      </div>
+
+      <h3>Создание пользователя</h3>
+      <div class="flow">
+        <div class="flow-box"><div class="label">Remnawave</div><div class="name">Панель</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box active"><div class="label">POST /webhook</div><div class="name">user.created</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">hy-webhook :8766</div><div class="name">Проверка подписи</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">users.json</div><div class="name">Сохранить пароль</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">config.yaml</div><div class="name">userpass обновить</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">systemctl</div><div class="name">reload hysteria</div></div>
+      </div>
+
+      <h3>Запрос подписки клиентом</h3>
+      <div class="flow">
+        <div class="flow-box"><div class="label">Клиент</div><div class="name">GET /{shortUuid}</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box active"><div class="label">sub-page (форк)</div><div class="name">serveSubscriptionPage</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">Remnawave API</div><div class="name">api/sub/{shortUuid}</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">users.json</div><div class="name">lookup username</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box"><div class="label">Base64 ответ</div><div class="name">+ hy2:// URI</div></div>
+      </div>
+    </section>
+
+    <!-- ВЕБХУК-СЕРВИС -->
+    <section class="section" id="webhook">
+      <div class="section-header">
+        <div class="section-icon icon-purple">🪝</div>
+        <div class="section-title">Webhook-сервис (hy-webhook)</div>
+      </div>
+
+      <p>Python HTTP-сервер на <code>127.0.0.1:8766</code>. Слушает только локальный интерфейс — проксировать его наружу не нужно.</p>
+
+      <h3>Эндпоинты</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Метод</th><th>Путь</th><th>Описание</th></tr></thead>
+          <tbody>
+            <tr><td>GET</td><td>/health</td><td>Статус сервиса и количество пользователей в БД</td></tr>
+            <tr><td>POST</td><td>/webhook</td><td>Приём событий от Remnawave</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Проверка подписи</h3>
+      <p>Remnawave отправляет заголовок <code>X-Remnawave-Signature</code> с HMAC-SHA256 от тела запроса, вычисленным по значению <code>WEBHOOK_SECRET_HEADER</code>. Сервис проверяет подпись идентично:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">python</span></div>
+        <pre><span class="kw">import</span> hmac, hashlib
+
+signature = headers.get(<span class="str">"X-Remnawave-Signature"</span>, <span class="str">""</span>)
+expected = hmac.new(
+    WEBHOOK_SECRET.encode(),
+    body,
+    hashlib.sha256
+).hexdigest()
+valid = hmac.compare_digest(expected, signature)</pre>
+      </div>
+
+      <div class="alert alert-info">
+        <span class="alert-icon">ℹ️</span>
+        <div>Remnawave также отправляет <code>X-Remnawave-Timestamp</code> с ISO-датой события. Hy-webhook его не проверяет, но можно использовать для защиты от replay-атак при необходимости.</div>
+      </div>
+
+      <h3>Санитизация имён пользователей</h3>
+      <p>Пароль привязывается к санитизированному имени (как в самой Remnawave). Алгоритм соответствует <code>sanitize-username.ts</code> из исходников панели:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">python</span></div>
+        <pre><span class="comment"># Допустимые символы: [a-zA-Z0-9_-]</span>
+<span class="comment"># Точка НЕ допустима (в отличие от YAML)</span>
+safe = re.sub(<span class="str">r'[^a-zA-Z0-9_\-]'</span>, <span class="str">'_'</span>, username)
+
+<span class="comment"># Минимальная длина: 6 символов (дополняется _)</span>
+<span class="kw">if</span> len(safe) &lt; <span class="num">6</span>:
+    safe = safe + <span class="str">'_'</span> * (<span class="num">6</span> - len(safe))</pre>
+      </div>
+
+      <h3>Генерация паролей</h3>
+      <p>Пароль детерминированный — вычисляется из имени пользователя и webhook secret:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">python</span></div>
+        <pre><span class="kw">def</span> <span class="fn">gen_password</span>(username):
+    seed = f<span class="str">"{username}:{WEBHOOK_SECRET}"</span>
+    <span class="kw">return</span> hashlib.sha256(seed.encode()).hexdigest()[:<span class="num">32</span>]</pre>
+      </div>
+      <p>Это значит: при одинаковом secret один и тот же пользователь всегда получит один и тот же пароль. Если пользователь удалён и создан снова — пароль восстановится автоматически.</p>
+    </section>
+
+    <!-- ФОРК SUB-PAGE -->
+    <section class="section" id="subpage">
+      <div class="section-header">
+        <div class="section-icon icon-green">📄</div>
+        <div class="section-title">Форк subscription-page</div>
+      </div>
+
+      <p>Скрипт скачивает исходники <a href="https://github.com/remnawave/subscription-page" style="color: var(--accent)">remnawave/subscription-page</a>, применяет три патча и собирает локальный Docker-образ <code>remnawave-sub-hy:local</code>.</p>
+
+      <h3>Патч 1 — импорт fs</h3>
+      <p>В <code>root.service.ts</code> добавляется импорт Node.js файловой системы для чтения <code>users.json</code>:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">typescript</span></div>
+        <pre><span class="kw">import</span> * <span class="kw">as</span> fs <span class="kw">from</span> <span class="str">'node:fs'</span>; <span class="comment">// добавлено</span>
+<span class="kw">import</span> { nanoid } <span class="kw">from</span> <span class="str">'nanoid'</span>;   <span class="comment">// существующий</span></pre>
+      </div>
+
+      <h3>Патч 2 — инъекция hy2:// URI</h3>
+      <p>В метод <code>serveSubscriptionPage()</code>, сразу после получения ответа от Remnawave API, вставляется блок инъекции. Метод <code>getSubscription()</code> возвращает base64-закодированный список прокси — форк декодирует его, дописывает <code>hy2://</code> строку и кодирует обратно:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">typescript</span></div>
+        <pre><span class="comment">// ── Hysteria2 URI injection ──────────────────────────</span>
+<span class="kw">try</span> {
+    <span class="kw">const</span> hyUri = <span class="kw">await</span> this.getHysteriaUriForUser(shortUuidLocal, clientIp);
+    <span class="kw">if</span> (hyUri) {
+        <span class="kw">const</span> raw = subscriptionDataResponse.response <span class="kw">as</span> <span class="fn">string</span>;
+        <span class="kw">const</span> lines = Buffer.from(raw, <span class="str">'base64'</span>)
+            .toString(<span class="str">'utf-8'</span>)
+            .split(<span class="str">'\n'</span>)
+            .filter(l =&gt; l.trim());
+        lines.push(hyUri);
+        subscriptionDataResponse = {
+            ...subscriptionDataResponse,
+            response: Buffer.from(lines.join(<span class="str">'\n'</span>)).toString(<span class="str">'base64'</span>),
+        };
+    }
+} <span class="kw">catch</span> (e) {
+    this.logger.warn(<span class="str">'Hysteria2 inject error: '</span> + e);
+}
+<span class="comment">// ─────────────────────────────────────────────────────</span></pre>
+      </div>
+
+      <h3>Патч 3 — метод getHysteriaUriForUser</h3>
+      <p>Приватный метод разрешает shortUuid → username через <code>api/users/by-short-uuid/{shortUuid}</code>, ищет пользователя в <code>users.json</code> и строит <code>hy2://</code> URI:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">typescript</span></div>
+        <pre><span class="comment">// URI формат:</span>
+<span class="str">'hy2://'</span> + encodeURIComponent(safeUsername) + <span class="str">':'</span> + password +
+<span class="str">'@'</span> + hyDomain + <span class="str">':'</span> + hyPort +
+<span class="str">'?sni='</span> + hyDomain + <span class="str">'&amp;alpn=h3&amp;insecure=0#'</span> + encodeURIComponent(hyName)</pre>
+      </div>
+
+      <h3>Патч 4 — getUserByShortUuid в axios.service.ts</h3>
+      <p>Добавляется метод для получения полной информации о пользователе по shortUuid. Использует корректный API-маршрут Remnawave:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">typescript</span></div>
+        <pre><span class="comment">// Правильный URL: api/users/by-short-uuid/{shortUuid}</span>
+<span class="comment">// Источник: USERS_ROUTES.GET_BY.SHORT_UUID в backend-contract</span>
+url: <span class="str">'api/users/by-short-uuid/'</span> + shortUuid</pre>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- СОБЫТИЯ -->
+    <section class="section" id="events">
+      <div class="section-header">
+        <div class="section-icon icon-amber">📡</div>
+        <div class="section-title">Обрабатываемые события</div>
+      </div>
+
+      <p>Remnawave отправляет события с полем <code>scope: "user"</code>. Сервис реагирует только на них:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>event</th><th>Действие</th><th>Источник</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>user.created</td>
+              <td>Добавить пользователя → обновить конфиг → reload</td>
+              <td><span class="badge badge-green">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.enabled</td>
+              <td>Восстановить пользователя (если удалён)</td>
+              <td><span class="badge badge-green">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.traffic_reset</td>
+              <td>Восстановить пользователя после сброса трафика</td>
+              <td><span class="badge badge-green">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.deleted</td>
+              <td>Удалить из конфига → reload</td>
+              <td><span class="badge badge-red">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.disabled</td>
+              <td>Удалить из конфига (отключить доступ)</td>
+              <td><span class="badge badge-red">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.limited</td>
+              <td>Лимит трафика — удалить из конфига</td>
+              <td><span class="badge badge-red">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.expired</td>
+              <td>Истёк срок — удалить из конфига</td>
+              <td><span class="badge badge-red">активный</span></td>
+            </tr>
+            <tr>
+              <td>user.modified, user.revoked, и др.</td>
+              <td>Игнорируются</td>
+              <td><span class="badge badge-amber">игнор</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="alert alert-info">
+        <span class="alert-icon">ℹ️</span>
+        <div>Полный список событий Remnawave доступен в <code>libs/contract/constants/events/events.ts</code> исходников backend. Для добавления новых событий достаточно дополнить условие в функции <code>process_event()</code> в <code>hy-webhook.py</code>.</div>
+      </div>
+    </section>
+
+    <!-- СТРУКТУРА PAYLOAD -->
+    <section class="section" id="payload">
+      <div class="section-header">
+        <div class="section-icon icon-purple">📦</div>
+        <div class="section-title">Структура webhook payload</div>
+      </div>
+
+      <p>Remnawave отправляет POST-запрос с JSON-телом. Структура для пользовательских событий (scope: "user"):</p>
+
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">json</span></div>
+        <pre>{
+  <span class="key">"scope"</span>: <span class="str">"user"</span>,
+  <span class="key">"event"</span>: <span class="str">"user.created"</span>,
+  <span class="key">"timestamp"</span>: <span class="str">"2026-01-15T10:30:00.000Z"</span>,
+  <span class="key">"data"</span>: {
+    <span class="key">"uuid"</span>: <span class="str">"550e8400-e29b-41d4-a716-446655440000"</span>,
+    <span class="key">"shortUuid"</span>: <span class="str">"abc123"</span>,
+    <span class="key">"username"</span>: <span class="str">"john_doe"</span>,         <span class="comment">// ← используется сервисом</span>
+    <span class="key">"status"</span>: <span class="str">"ACTIVE"</span>,
+    <span class="key">"trafficLimitBytes"</span>: <span class="num">10737418240</span>,
+    <span class="key">"expireAt"</span>: <span class="str">"2027-01-15T00:00:00.000Z"</span>,
+    <span class="key">"subscriptionUrl"</span>: <span class="str">"https://sub.example.com/abc123"</span>,
+    <span class="key">"userTraffic"</span>: { <span class="key">"usedBytes"</span>: <span class="num">0</span>, <span class="key">"remainingBytes"</span>: <span class="num">10737418240</span> },
+    <span class="comment">// ... другие поля ExtendedUsersSchema</span>
+  },
+  <span class="key">"meta"</span>: <span class="kw">null</span>
+}</pre>
+      </div>
+
+      <h3>Заголовки запроса</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Заголовок</th><th>Значение</th></tr></thead>
+          <tbody>
+            <tr><td>Content-Type</td><td>application/json</td></tr>
+            <tr><td>X-Remnawave-Signature</td><td>HMAC-SHA256(body, WEBHOOK_SECRET_HEADER) в hex</td></tr>
+            <tr><td>X-Remnawave-Timestamp</td><td>ISO-дата события</td></tr>
+            <tr><td>User-Agent</td><td>Remnawave</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ПЕРЕМЕННЫЕ СРЕДЫ -->
+    <section class="section" id="env">
+      <div class="section-header">
+        <div class="section-icon icon-green">⚙️</div>
+        <div class="section-title">Переменные среды</div>
+      </div>
+
+      <h3>hy-webhook.service</h3>
+      <p>Прописываются в systemd-сервис (<code>/etc/systemd/system/hy-webhook.service</code>). Читаются как <code>os.environ</code> в Python:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Переменная</th><th>По умолчанию</th><th>Описание</th></tr></thead>
+          <tbody>
+            <tr><td>WEBHOOK_SECRET</td><td><em>сгенерированный</em></td><td>HMAC-ключ проверки подписи (=WEBHOOK_SECRET_HEADER в панели)</td></tr>
+            <tr><td>HYSTERIA_CONFIG</td><td>/etc/hysteria/config.yaml</td><td>Путь к конфигу Hysteria2</td></tr>
+            <tr><td>USERS_DB</td><td>/var/lib/hy-webhook/users.json</td><td>БД пользователей {username: password}</td></tr>
+            <tr><td>LISTEN_PORT</td><td>8766</td><td>Локальный порт вебхук-сервиса</td></tr>
+            <tr><td>HYSTERIA_SVC</td><td>hysteria-server</td><td>Имя systemd-сервиса Hysteria2</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Remnawave Panel (.env)</h3>
+      <p>Скрипт автоматически прописывает эти строки в <code>/opt/remnawave/.env</code>:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">env</span></div>
+        <pre><span class="key">WEBHOOK_ENABLED</span>=<span class="val">true</span>
+<span class="key">WEBHOOK_URL</span>=<span class="val">http://127.0.0.1:8766/webhook</span>
+<span class="key">WEBHOOK_SECRET_HEADER</span>=<span class="val">&lt;сгенерированный 64-hex secret&gt;</span></pre>
+      </div>
+      <div class="alert alert-info">
+        <span class="alert-icon">ℹ️</span>
+        <div><code>WEBHOOK_SECRET_HEADER</code> — это именно секретный ключ HMAC, несмотря на название. Remnawave использует его для вычисления HMAC-SHA256 подписи тела запроса.</div>
+      </div>
+
+      <h3>subscription-page (docker-compose.yml)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Переменная</th><th>Описание</th></tr></thead>
+          <tbody>
+            <tr><td>HY_DOMAIN</td><td>Домен Hysteria2 (из конфига)</td></tr>
+            <tr><td>HY_PORT</td><td>Порт Hysteria2 (из конфига)</td></tr>
+            <tr><td>HY_NAME</td><td>Название подключения в клиенте</td></tr>
+            <tr><td>HY_USERS_DB</td><td>/var/lib/hy-webhook/users.json</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ФАЙЛЫ -->
+    <section class="section" id="files">
+      <div class="section-header">
+        <div class="section-icon icon-amber">📁</div>
+        <div class="section-title">Файлы и пути</div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Путь</th><th>Описание</th></tr></thead>
+          <tbody>
+            <tr><td>/opt/hy-webhook/hy-webhook.py</td><td>Python webhook-сервис</td></tr>
+            <tr><td>/var/lib/hy-webhook/users.json</td><td>БД пользователей {safe_username: password}</td></tr>
+            <tr><td>/etc/systemd/system/hy-webhook.service</td><td>Systemd unit файл</td></tr>
+            <tr><td>/opt/hy-subpage/</td><td>Исходники форка subscription-page</td></tr>
+            <tr><td>/opt/remnawave/docker-compose.yml</td><td>Обновляется: образ + env + volumes</td></tr>
+            <tr><td>/opt/remnawave/.env</td><td>Обновляется: WEBHOOK_* переменные</td></tr>
+            <tr><td>/etc/hysteria/config.yaml</td><td>Обновляется: блок userpass</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Формат users.json</h3>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">json</span></div>
+        <pre>{
+  <span class="key">"john_doe"</span>: <span class="str">"a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5"</span>,
+  <span class="key">"alice__"</span>: <span class="str">"9d2e1f3c4b5a6e7f8d0c1b2a3f4e5d6c"</span>,
+  <span class="comment">// имена ≥6 символов, только [a-zA-Z0-9_-]</span>
+  <span class="comment">// пароли — hex[32] от sha256(username:secret)</span>
+}</pre>
+      </div>
+    </section>
+
+    <!-- ДИАГНОСТИКА -->
+    <section class="section" id="troubleshoot">
+      <div class="section-header">
+        <div class="section-icon icon-red">🔧</div>
+        <div class="section-title">Диагностика</div>
+      </div>
+
+      <h3>Статус сервисов</h3>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">bash</span></div>
+        <pre><span class="comment"># Health-check вебхук сервиса</span>
+curl -s http://127.0.0.1:8766/health | python3 -m json.tool
+
+<span class="comment"># Логи webhook в реальном времени</span>
+journalctl -u hy-webhook -f
+
+<span class="comment"># Последние 50 строк логов</span>
+journalctl -u hy-webhook -n 50
+
+<span class="comment"># Статус Hysteria2</span>
+systemctl status hysteria-server
+
+<span class="comment"># Логи subscription-page</span>
+docker logs remnawave-subscription-page --tail 50 -f</pre>
+      </div>
+
+      <h3>Проверить пользователей</h3>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">bash</span></div>
+        <pre><span class="comment"># Количество пользователей в БД</span>
+cat /var/lib/hy-webhook/users.json | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print(f'{len(d)} users')"
+
+<span class="comment"># Список usernames</span>
+cat /var/lib/hy-webhook/users.json | python3 -c \
+  "import json,sys; [print(k) for k in json.load(sys.stdin)]"
+
+<span class="comment"># Текущий userpass блок в конфиге Hysteria2</span>
+grep -A 100 'userpass:' /etc/hysteria/config.yaml | head -20</pre>
+      </div>
+
+      <h3>Тест вебхука вручную</h3>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">bash</span></div>
+        <pre><span class="comment"># Получить secret из сервиса</span>
+SECRET=$(grep "WEBHOOK_SECRET=" /etc/systemd/system/hy-webhook.service \
+  | cut -d= -f3)
+
+<span class="comment"># Сформировать тестовый payload</span>
+PAYLOAD='{"scope":"user","event":"user.created","data":{"username":"test_user_01"}}'
+
+<span class="comment"># Вычислить подпись</span>
+SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" -hex | cut -d' ' -f2)
+
+<span class="comment"># Отправить запрос</span>
+curl -s -X POST http://127.0.0.1:8766/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Remnawave-Signature: $SIG" \
+  -d "$PAYLOAD"</pre>
+      </div>
+
+      <h3>Частые проблемы</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Проблема</th><th>Причина</th><th>Решение</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>hy-webhook не запускается</td>
+              <td>Порт 8766 занят или Python недоступен</td>
+              <td><code>ss -tlnp | grep 8766</code>, <code>which python3</code></td>
+            </tr>
+            <tr>
+              <td>401 на вебхуке</td>
+              <td>Несовпадение WEBHOOK_SECRET в сервисе и .env панели</td>
+              <td>Сверить значения, запустить скрипт в режиме 2</td>
+            </tr>
+            <tr>
+              <td>Hysteria2 не перезапускается</td>
+              <td>Ошибка в YAML после обновления userpass</td>
+              <td><code>hysteria server --config /etc/hysteria/config.yaml --check</code></td>
+            </tr>
+            <tr>
+              <td>hy2:// нет в подписке</td>
+              <td>Форк не собрался или пользователь не в users.json</td>
+              <td>Проверить <code>docker logs</code>, проверить health: <code>curl …/health</code></td>
+            </tr>
+            <tr>
+              <td>Пользователь есть в панели, но нет в Hysteria</td>
+              <td>Пользователь создан до установки скрипта</td>
+              <td>Запустить скрипт, шаг [3/6] пересинхронизирует всех</td>
+            </tr>
+            <tr>
+              <td>subscription-page не запустился</td>
+              <td>Ошибка сборки Docker или несовместимая версия</td>
+              <td><code>docker logs remnawave-subscription-page</code>, пересобрать режимом 3</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Принудительная пересинхронизация</h3>
+      <p>Если пользователи в БД и в конфиге Hysteria2 разошлись, перезапустите hy-webhook — при старте он применяет текущую БД к конфигу:</p>
+      <div class="code-block">
+        <div class="code-header"><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div><span class="code-lang">bash</span></div>
+        <pre>systemctl restart hy-webhook</pre>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+// Active nav link on scroll
+const sections = document.querySelectorAll('.section');
+const navLinks = document.querySelectorAll('.nav-link');
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const active = document.querySelector(`.nav-link[href="#${entry.target.id}"]`);
+      if (active) active.classList.add('active');
+    }
+  });
+}, { threshold: 0.3 });
+
+sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
