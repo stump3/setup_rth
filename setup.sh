@@ -1382,7 +1382,7 @@ case "$1" in
             read -p "  Выбор: " ch < /dev/tty
             case $ch in
                 1) read -p "  Логи (panel/nginx/sub/node) [panel]: " s < /dev/tty; do_logs "${s:-panel}" ;;
-                2) do_status; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
+                2) do_status; read -t 0.1 -n 1000 _flush < /dev/tty 2>/dev/null || true; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
                 3) read -p "  Что перезапустить? [all]: " s < /dev/tty; do_restart "${s:-all}"; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
                 4) cd /opt/remnawave && docker compose up -d; _ok "Запущено"; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
                 5) do_update; read -p "  Нажмите Enter для продолжения..." < /dev/tty ;;
