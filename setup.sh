@@ -255,7 +255,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -q 2>/dev/null
 apt-get install -y -q curl wget git jq openssl ca-certificates gnupg dnsutils \
     certbot python3-certbot-dns-cloudflare sshpass${extra_pkgs} 2>/dev/null
-command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1; systemctl enable docker >/dev/null 2>&1; }
+command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1; systemctl enable docker >/dev/null 2>&1; } # intentional: official Docker installer
 [ ! -f /swapfile ] && { fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab; }
 grep -q "bbr" /etc/sysctl.conf 2>/dev/null || {
     echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
@@ -440,7 +440,7 @@ panel_install() {
     systemctl is-enabled --quiet cron || systemctl enable cron
     ok "Системные пакеты"
     ! command -v docker &>/dev/null && {
-        curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
+        curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 # intentional: official Docker installer
         systemctl enable docker >/dev/null 2>&1
         ok "Docker установлен"
     } || ok "Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')"
@@ -909,7 +909,10 @@ NGINX_CONF_EOF
             -o /tmp/tmpl.zip 2>/dev/null && \
        unzip -q /tmp/tmpl.zip -d /tmp/tmpl 2>/dev/null; then
         TDIRS=(/tmp/tmpl/simple-web-templates-main/*/)
-        [ ${#TDIRS[@]} -gt 0 ] && cp -a "${TDIRS[$RANDOM % ${#TDIRS[@]}]}/." /var/www/html/ 2>/dev/null || true
+        if [ ${#TDIRS[@]} -gt 0 ]; then
+            local _ridx; _ridx=$(python3 -c "import random,sys; print(random.randrange(int(sys.argv[1])))" "${#TDIRS[@]}" 2>/dev/null || echo "0")
+            cp -a "${TDIRS[$_ridx]}/." /var/www/html/ 2>/dev/null || true
+        fi
         rm -rf /tmp/tmpl /tmp/tmpl.zip
         ok "Маскировочный сайт установлен"
     else
@@ -1133,7 +1136,8 @@ do_ssl() {
     _ok "SSL обновлён"
 }
 do_backup() {
-    local ts=$(date +%Y%m%d_%H%M%S) b="$DIR/backups"; mkdir -p "$b"; cd "$DIR"
+    local ts b
+    ts=$(date +%Y%m%d_%H%M%S); b="$DIR/backups"; mkdir -p "$b"; cd "$DIR"
     docker compose exec -T remnawave-db pg_dump -U postgres postgres>"$b/db_$ts.sql" 2>/dev/null \
         && _ok "БД → $b/db_$ts.sql" || _warn "Ошибка бэкапа БД"
     tar -czf "$b/configs_$ts.tar.gz" "$DIR/.env" "$DIR/docker-compose.yml" "$DIR/nginx.conf" 2>/dev/null
@@ -1686,7 +1690,7 @@ panel_install_template() {
         "sni")     selected_url="${urls[1]}" ;;
         "nothing") selected_url="${urls[2]}" ;;
         *)
-            local idx=$((RANDOM % 3))
+            local idx; idx=$(python3 -c "import random; print(random.randrange(3))" 2>/dev/null || echo "$((RANDOM % 3))")
             selected_url="${urls[$idx]}"
             ;;
     esac
@@ -1702,7 +1706,8 @@ panel_install_template() {
         dir="simple-web-templates-main"
         cd "$dir" && rm -rf assets .gitattributes README.md _config.yml 2>/dev/null
         mapfile -t templates < <(find . -maxdepth 1 -type d -not -path .)
-        template="${templates[$RANDOM % ${#templates[@]}]}"
+        local _tidx; _tidx=$(python3 -c "import random,sys; print(random.randrange(int(sys.argv[1])))" "${#templates[@]}" 2>/dev/null || echo "0")
+        template="${templates[$_tidx]}"
     elif [[ "$selected_url" == *"nothing-sni"* ]]; then
         dir="nothing-sni-main"
         cd "$dir" && rm -rf .github README.md 2>/dev/null
@@ -1711,7 +1716,8 @@ panel_install_template() {
         dir="sni-templates-main"
         cd "$dir" && rm -rf assets README.md index.html 2>/dev/null
         mapfile -t templates < <(find . -maxdepth 1 -type d -not -path .)
-        template="${templates[$RANDOM % ${#templates[@]}]}"
+        local _tidx; _tidx=$(python3 -c "import random,sys; print(random.randrange(int(sys.argv[1])))" "${#templates[@]}" 2>/dev/null || echo "0")
+        template="${templates[$_tidx]}"
     fi
     # Рандомизация HTML
     local rand_id; rand_id=$(openssl rand -hex 8)
@@ -2504,7 +2510,9 @@ telemt_menu_migrate_docker() {
     config_to_send=$(sed "s/^port = .*/port = $new_pp/; s/tls_domain.*=.*/tls_domain    = \"$new_dom\"/" "$TELEMT_CONFIG_FILE")
 
     info "Проверяю Docker на новом сервере..."
-    RRUN "command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 && systemctl enable docker; }"         && ok "Docker готов" || die "Не удалось установить Docker"
+    # intentional: official Docker installer
+    RRUN "command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 && systemctl enable docker; }" \
+        && ok "Docker готов" || die "Не удалось установить Docker"
 
     info "Копирую конфиг и compose файл..."
     RRUN "mkdir -p $(dirname "$TELEMT_CONFIG_FILE") $(dirname "$TELEMT_COMPOSE_FILE")"
@@ -2547,41 +2555,43 @@ for u in users:
 }
 
 telemt_main_menu() {
-    local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
-    local ver; ver=$(get_telemt_version)
-    local telemt_port=""
-    [ -f "$TELEMT_CONFIG_FILE" ] && telemt_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1 || true)
-    clear
-    echo ""
-    echo -e "${BOLD}${WHITE}  📡  MTProxy (telemt)${NC}"
-    echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
-    if [ -n "$ver" ] || [ -n "$telemt_port" ]; then
-        [ -n "$ver" ]         && echo -e "  ${GRAY}Версия  ${NC}${ver}  ${GRAY}(${mode_label})${NC}"
-        [ -n "$telemt_port" ] && echo -e "  ${GRAY}Порт    ${NC}${telemt_port}"
+    while true; do
+        local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
+        local ver telemt_port
+        ver=$(get_telemt_version 2>/dev/null || true)
+        telemt_port=""
+        [ -f "$TELEMT_CONFIG_FILE" ] && telemt_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1 || true)
+        clear
         echo ""
-    fi
-    echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
-    echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
-    echo -e "  ${BOLD}3)${RESET} 👥  Пользователи"
-    echo -e "  ${BOLD}4)${RESET} 📦  Миграция на другой сервер"
-    echo -e "  ${BOLD}5)${RESET} 🔀  Сменить режим (systemd ↔ Docker)"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
-    echo ""
-    local ch; read -rp "  Выбор: " ch < /dev/tty
-    case "$ch" in
-        1) telemt_menu_install ;;
-        2) telemt_submenu_manage ;;
-        3) telemt_submenu_users ;;
-        4) if [ "$TELEMT_MODE" = "systemd" ]; then
-               telemt_menu_migrate
-           else
-               telemt_menu_migrate_docker
-           fi ;;
-        5) telemt_choose_mode; telemt_check_deps ;;
-        0) return ;;
-        *) warn "Неверный выбор" ;;
-    esac
-    telemt_main_menu
+        echo -e "${BOLD}${WHITE}  📡  MTProxy (telemt)${NC}"
+        echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
+        if [ -n "$ver" ] || [ -n "$telemt_port" ]; then
+            [ -n "$ver" ]         && echo -e "  ${GRAY}Версия  ${NC}${ver}  ${GRAY}(${mode_label})${NC}"
+            [ -n "$telemt_port" ] && echo -e "  ${GRAY}Порт    ${NC}${telemt_port}"
+            echo ""
+        fi
+        echo -e "  ${BOLD}1)${RESET} 🔧  Установка"
+        echo -e "  ${BOLD}2)${RESET} ⚙️   Управление"
+        echo -e "  ${BOLD}3)${RESET} 👥  Пользователи"
+        echo -e "  ${BOLD}4)${RESET} 📦  Миграция на другой сервер"
+        echo -e "  ${BOLD}5)${RESET} 🔀  Сменить режим (systemd ↔ Docker)"
+        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo ""
+        local ch; read -rp "  Выбор: " ch < /dev/tty
+        case "$ch" in
+            1) telemt_menu_install ;;
+            2) telemt_submenu_manage ;;
+            3) telemt_submenu_users ;;
+            4) if [ "$TELEMT_MODE" = "systemd" ]; then
+                   telemt_menu_migrate
+               else
+                   telemt_menu_migrate_docker
+               fi ;;
+            5) telemt_choose_mode; telemt_check_deps ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
 }
 
 telemt_submenu_manage() {
@@ -3317,9 +3327,19 @@ hysteria_status() {
         echo ""
         echo -e "  ${WHITE}Конфигурация:${NC}"
         local dom port usr
-        dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -- '- ' | head -1 | tr -d ' -' || echo "—")
-        port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "—")
-        usr=$(grep -A2 'userpass:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -v 'userpass:' | head -1 | awk -F: '{print $1}' | tr -d ' ' || echo "—")
+        dom=$(hy_get_domain 2>/dev/null || echo "—")
+        port=$(hy_get_port 2>/dev/null || echo "—")
+        # Первый пользователь из userpass (Python для надёжности)
+        usr=$(python3 -c "
+import re, sys
+try:
+    cfg = open('$HYSTERIA_CONFIG').read()
+    m = re.search(r'userpass:
+(    ([^
+:]+):', cfg)
+    print(m.group(2).strip() if m else '—')
+except: print('—')
+" 2>/dev/null || echo "—")
         echo "    Домен: $dom    Порт: $port    Пользователь: $usr"
     fi
 }
@@ -3883,76 +3903,80 @@ SVCEOF
 
 
 hysteria_menu() {
-    local ver; ver=$(get_hysteria_version)
-    local dom port
-    dom=$(hy_get_domain 2>/dev/null || echo "")
-    port=$(hy_get_port 2>/dev/null || echo "")
-    clear
-    echo ""
-    echo -e "${BOLD}${WHITE}  🚀  Hysteria2${NC}"
-    echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
-    if [ -n "$ver" ] || [ -n "$dom" ]; then
-        [ -n "$ver" ] && echo -e "  ${GRAY}Версия  ${NC}${ver}"
-        [ -n "$dom" ] && echo -e "  ${GRAY}Сервер  ${NC}${dom}${port:+:$port}"
+    while true; do
+        # Защита от set -e: || true на всех внешних командах
+        local ver dom port
+        ver=$(get_hysteria_version 2>/dev/null || true)
+        dom=$(hy_get_domain 2>/dev/null || true)
+        port=$(hy_get_port 2>/dev/null || true)
+        clear
         echo ""
-    fi
-    echo -e "  ${BOLD}1)${RESET}  🔧  Установка"
-    echo -e "  ${BOLD}2)${RESET}  ⚙️   Управление"
-    echo -e "  ${BOLD}3)${RESET}  👥  Пользователи"
-    echo -e "  ${BOLD}4)${RESET}  🔗  Подписка"
-    echo -e "  ${BOLD}5)${RESET}  📦  Миграция на другой сервер"
-    echo ""
-    echo -e "  ${BOLD}0)${RESET}  ◀️   Назад"
-    echo ""
-    local ch; read -rp "  Выбор: " ch < /dev/tty
-    case "$ch" in
-        1) hysteria_install ;;
-        2) hysteria_submenu_manage ;;
-        3) hysteria_submenu_users ;;
-        4) hysteria_submenu_sub ;;
-        5) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
-        0) return ;;
-        *) warn "Неверный выбор" ;;
-    esac
-    hysteria_menu
+        echo -e "${BOLD}${WHITE}  🚀  Hysteria2${NC}"
+        echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
+        if [ -n "$ver" ] || [ -n "$dom" ]; then
+            [ -n "$ver" ] && echo -e "  ${GRAY}Версия  ${NC}${ver}"
+            [ -n "$dom" ] && echo -e "  ${GRAY}Сервер  ${NC}${dom}${port:+:$port}"
+            echo ""
+        fi
+        echo -e "  ${BOLD}1)${RESET}  🔧  Установка"
+        echo -e "  ${BOLD}2)${RESET}  ⚙️   Управление"
+        echo -e "  ${BOLD}3)${RESET}  👥  Пользователи"
+        echo -e "  ${BOLD}4)${RESET}  🔗  Подписка"
+        echo -e "  ${BOLD}5)${RESET}  📦  Миграция на другой сервер"
+        echo ""
+        echo -e "  ${BOLD}0)${RESET}  ◀️   Назад"
+        echo ""
+        local ch; read -rp "  Выбор: " ch < /dev/tty
+        case "$ch" in
+            1) hysteria_install ;;
+            2) hysteria_submenu_manage ;;
+            3) hysteria_submenu_users ;;
+            4) hysteria_submenu_sub ;;
+            5) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
 }
 
 hysteria_submenu_manage() {
-    clear
-    header "Hysteria2 — Управление"
-    echo -e "  ${BOLD}1)${RESET} 📊  Статус"
-    echo -e "  ${BOLD}2)${RESET} 📋  Логи"
-    echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
-    echo ""
-    local ch; read -rp "  Выбор: " ch < /dev/tty
-    case "$ch" in
-        1) hysteria_status; read -rp "Enter..." < /dev/tty ;;
-        2) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
-        3) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
-        0) return ;;
-        *) warn "Неверный выбор" ;;
-    esac
-    hysteria_submenu_manage
+    while true; do
+        clear
+        header "Hysteria2 — Управление"
+        echo -e "  ${BOLD}1)${RESET} 📊  Статус"
+        echo -e "  ${BOLD}2)${RESET} 📋  Логи"
+        echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
+        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo ""
+        local ch; read -rp "  Выбор: " ch < /dev/tty
+        case "$ch" in
+            1) hysteria_status; read -rp "Enter..." < /dev/tty ;;
+            2) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
+            3) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
 }
 
 hysteria_submenu_users() {
-    clear
-    header "Hysteria2 — Пользователи"
-    echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
-    echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
-    echo -e "  ${BOLD}3)${RESET} 👥  Пользователи и ссылки"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
-    echo ""
-    local ch; read -rp "  Выбор: " ch < /dev/tty
-    case "$ch" in
-        1) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
-        2) hysteria_delete_user; read -rp "Enter..." < /dev/tty ;;
-        3) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
-        0) return ;;
-        *) warn "Неверный выбор" ;;
-    esac
-    hysteria_submenu_users
+    while true; do
+        clear
+        header "Hysteria2 — Пользователи"
+        echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
+        echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
+        echo -e "  ${BOLD}3)${RESET} 👥  Пользователи и ссылки"
+        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo ""
+        local ch; read -rp "  Выбор: " ch < /dev/tty
+        case "$ch" in
+            1) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
+            2) hysteria_delete_user; read -rp "Enter..." < /dev/tty ;;
+            3) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
 }
 
 
@@ -4004,22 +4028,23 @@ hysteria_remnawave_integration() {
 }
 
 hysteria_submenu_sub() {
-    clear
-    header "Hysteria2 — Подписка"
-    echo -e "  ${BOLD}1)${RESET} 📤  Опубликовать подписку"
-    echo -e "  ${BOLD}2)${RESET} 🔗  Объединить с подпиской Remnawave (merger)"
-    echo -e "  ${BOLD}3)${RESET} 🪝  Интеграция с Remnawave (webhook + sub-page)"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
-    echo ""
-    local ch; read -rp "  Выбор: " ch < /dev/tty
-    case "$ch" in
-        1) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
-        2) hysteria_merge_sub; read -rp "Enter..." < /dev/tty ;;
-        3) hysteria_remnawave_integration ;;
-        0) return ;;
-        *) warn "Неверный выбор" ;;
-    esac
-    hysteria_submenu_sub
+    while true; do
+        clear
+        header "Hysteria2 — Подписка"
+        echo -e "  ${BOLD}1)${RESET} 📤  Опубликовать подписку"
+        echo -e "  ${BOLD}2)${RESET} 🔗  Объединить с подпиской Remnawave (merger)"
+        echo -e "  ${BOLD}3)${RESET} 🪝  Интеграция с Remnawave (webhook + sub-page)"
+        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo ""
+        local ch; read -rp "  Выбор: " ch < /dev/tty
+        case "$ch" in
+            1) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
+            2) hysteria_merge_sub; read -rp "Enter..." < /dev/tty ;;
+            3) hysteria_remnawave_integration ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
 }
 
 
@@ -4097,7 +4122,7 @@ main_menu() {
         hy_ver=$(get_hysteria_version 2>/dev/null)
 
         if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
-            panel_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}v${rw_ver}${NC}}"
+            panel_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
         elif [ -d /opt/remnawave ]; then
             panel_status="${YELLOW}◐${NC} остановлена"
         else
@@ -4115,7 +4140,7 @@ main_menu() {
         fi
 
         if hy_is_running 2>/dev/null; then
-            hysteria_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}v${hy_ver}${NC}}"
+            hysteria_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
         elif hy_is_installed 2>/dev/null; then
             hysteria_status="${YELLOW}◐${NC} остановлена"
         else
