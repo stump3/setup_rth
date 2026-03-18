@@ -2833,9 +2833,43 @@ hy_resolve_a() {
 
 # ── Установка ─────────────────────────────────────────────────────
 hysteria_install() {
-    step "Установка Hysteria2"
+    step "Установка / Переустановка Hysteria2"
 
-    # Домен
+    # ── Переустановка ──────────────────────────────────────────────
+    if hy_is_installed; then
+        echo ""
+        echo -e "  ${YELLOW}Hysteria2 уже установлена.${NC}"
+        echo -e "  ${BOLD}1)${RESET} Переустановить (сохранить пользователей и настройки)"
+        echo -e "  ${BOLD}2)${RESET} Переустановить полностью (сброс конфига)"
+        echo -e "  ${BOLD}0)${RESET} Отмена"
+        echo ""
+        local reinstall_ch
+        read -rp "  Выбор: " reinstall_ch < /dev/tty
+        case "$reinstall_ch" in
+            1)
+                info "Переустановка с сохранением конфига..."
+                local backup_cfg="/tmp/hysteria_backup_$(date +%Y%m%d_%H%M%S).yaml"
+                cp "$HYSTERIA_CONFIG" "$backup_cfg" 2>/dev/null && info "Конфиг сохранён: $backup_cfg"
+                systemctl stop "$HYSTERIA_SVC" 2>/dev/null || true
+                bash <(curl -fsSL https://get.hy2.sh/) || { err "Ошибка установки"; return 1; }
+                cp "$backup_cfg" "$HYSTERIA_CONFIG"
+                systemctl restart "$HYSTERIA_SVC"
+                ok "Hysteria2 переустановлена, конфиг восстановлен"
+                return 0
+                ;;
+            2)
+                warn "Конфиг будет удалён!"
+                read -rp "  Продолжить? (y/N): " confirm < /dev/tty
+                [[ "${confirm:-N}" =~ ^[yY]$ ]] || return 1
+                systemctl stop "$HYSTERIA_SVC" 2>/dev/null || true
+                rm -f "$HYSTERIA_CONFIG"
+                ;;
+            0) return 0 ;;
+            *) warn "Неверный выбор"; return 1 ;;
+        esac
+    fi
+
+    # ── Домен ──────────────────────────────────────────────────────
     local domain=""
     while true; do
         read -rp "  Домен (например cdn.example.com): " domain < /dev/tty
@@ -2843,12 +2877,12 @@ hysteria_install() {
         warn "Некорректный домен. Нужен FQDN вида sub.example.com"
     done
 
-    # Email
+    # ── Email ──────────────────────────────────────────────────────
     local email=""
-    read -rp "  Email для ACME (необязателен): " email < /dev/tty
+    read -rp "  Email для ACME (необязателен, Enter — пропустить): " email < /dev/tty
     email="${email// /}"
 
-    # CA
+    # ── CA ─────────────────────────────────────────────────────────
     echo ""
     echo -e "  ${WHITE}Центр сертификации (CA):${NC}"
     echo "  ┌──────────────────────────────────────────────────────────────────┐"
@@ -2868,57 +2902,100 @@ hysteria_install() {
     esac
     ok "CA: $ca_label"
 
-    # Порт
+    # ── Порт / Port Hopping ────────────────────────────────────────
     echo ""
-    echo -e "  ${WHITE}Выберите UDP порт:${NC}"
-    echo "  ⚠️  Порт 443 занят Xray/Reality если установлен Remnawave"
-    echo "  Проверка портов..."
-    local l8443 l2053 l2083 l2087
-    l8443=$(hy_port_label 8443); l2053=$(hy_port_label 2053)
-    l2083=$(hy_port_label 2083); l2087=$(hy_port_label 2087)
-    echo "  ┌──────────────────────────────────────────────────────────┐"
-    printf "  │  1) 8443  — рекомендуется  [%-26s]  │\n" "$l8443"
-    printf "  │  2) 2053  — альтернатива   [%-26s]  │\n" "$l2053"
-    printf "  │  3) 2083  — альтернатива   [%-26s]  │\n" "$l2083"
-    printf "  │  4) 2087  — альтернатива   [%-26s]  │\n" "$l2087"
-    echo "  │  5) Ввести свой порт                                     │"
-    echo "  └──────────────────────────────────────────────────────────┘"
-    local port_choice="" port
-    while [[ ! "$port_choice" =~ ^[12345]$ ]]; do
-        read -rp "  Выбор [1]: " port_choice < /dev/tty
-        port_choice="${port_choice:-1}"
+    echo -e "  ${WHITE}Режим порта:${NC}"
+    echo "  ┌────────────────────────────────────────────────────────┐"
+    echo "  │  1) Один порт      — стандарт                          │"
+    echo "  │  2) Port Hopping   — диапазон UDP (обход блокировок)   │"
+    echo "  └────────────────────────────────────────────────────────┘"
+    local port_mode=""
+    while [[ ! "$port_mode" =~ ^[12]$ ]]; do
+        read -rp "  Выбор [1]: " port_mode < /dev/tty
+        port_mode="${port_mode:-1}"
     done
-    case "$port_choice" in
-        1) port=8443 ;; 2) port=2053 ;; 3) port=2083 ;; 4) port=2087 ;;
-        5) while true; do
-               read -rp "  Порт (1-65535): " port < /dev/tty
-               [[ "$port" =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) && break
-               warn "Некорректный порт"
-           done ;;
-    esac
-    if ! hy_port_is_free "$port"; then
-        warn "Порт $port занят!"
-        local fp; read -rp "  Продолжить? (y/N): " fp < /dev/tty
-        [[ "${fp:-N}" =~ ^[yY]$ ]] || { warn "Отмена"; return 1; }
-    fi
-    ok "Порт: $port"
 
-    # Логин и пароль
+    local port port_hop_start port_hop_end listen_addr
+    if [ "$port_mode" = "2" ]; then
+        echo ""
+        echo -e "  ${WHITE}Диапазон портов для Port Hopping:${NC}"
+        read -rp "  Начало диапазона [20000]: " port_hop_start < /dev/tty
+        port_hop_start="${port_hop_start:-20000}"
+        read -rp "  Конец диапазона [29999]: "  port_hop_end < /dev/tty
+        port_hop_end="${port_hop_end:-29999}"
+        # Основной порт — первый в диапазоне
+        port="$port_hop_start"
+        listen_addr="0.0.0.0:${port_hop_start}-${port_hop_end}"
+        ok "Port Hopping: UDP ${port_hop_start}-${port_hop_end}"
+    else
+        echo ""
+        echo -e "  ${WHITE}Выберите UDP порт:${NC}"
+        echo "  ⚠️  Порт 443 занят Xray/Reality если установлен Remnawave"
+        info "Проверка портов..."
+        local l8443 l2053 l2083 l2087
+        l8443=$(hy_port_label 8443); l2053=$(hy_port_label 2053)
+        l2083=$(hy_port_label 2083); l2087=$(hy_port_label 2087)
+        echo "  ┌──────────────────────────────────────────────────────────┐"
+        printf "  │  1) 8443  — рекомендуется  [%-26s]  │\n" "$l8443"
+        printf "  │  2) 2053  — альтернатива   [%-26s]  │\n" "$l2053"
+        printf "  │  3) 2083  — альтернатива   [%-26s]  │\n" "$l2083"
+        printf "  │  4) 2087  — альтернатива   [%-26s]  │\n" "$l2087"
+        echo "  │  5) Ввести свой порт                                     │"
+        echo "  └──────────────────────────────────────────────────────────┘"
+        local port_choice=""
+        while [[ ! "$port_choice" =~ ^[12345]$ ]]; do
+            read -rp "  Выбор [1]: " port_choice < /dev/tty
+            port_choice="${port_choice:-1}"
+        done
+        case "$port_choice" in
+            1) port=8443 ;; 2) port=2053 ;; 3) port=2083 ;; 4) port=2087 ;;
+            5) while true; do
+                   read -rp "  Порт (1-65535): " port < /dev/tty
+                   [[ "$port" =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) && break
+                   warn "Некорректный порт"
+               done ;;
+        esac
+        listen_addr="0.0.0.0:${port}"
+        if ! hy_port_is_free "$port"; then
+            warn "Порт $port занят!"
+            local fp; read -rp "  Продолжить? (y/N): " fp < /dev/tty
+            [[ "${fp:-N}" =~ ^[yY]$ ]] || { warn "Отмена"; return 1; }
+        fi
+        ok "Порт: $port"
+    fi
+
+    # ── IPv6 ───────────────────────────────────────────────────────
+    echo ""
+    local use_ipv6=false
+    if ip -6 addr show 2>/dev/null | grep -q "inet6.*global"; then
+        read -rp "  Включить IPv6 поддержку? (y/N): " ipv6_ch < /dev/tty
+        [[ "${ipv6_ch:-N}" =~ ^[yY]$ ]] && {
+            use_ipv6=true
+            if [ "$port_mode" = "2" ]; then
+                listen_addr="[::]:${port_hop_start}-${port_hop_end}"
+            else
+                listen_addr="[::]:${port}"
+            fi
+            ok "IPv6 включён"
+        }
+    fi
+
+    # ── Пользователь ───────────────────────────────────────────────
     local username pass
-    read -rp "  Логин [Admin]: " username < /dev/tty
-    username="${username:-Admin}"
+    read -rp "  Логин [admin]: " username < /dev/tty
+    username="${username:-admin}"
     read -rp "  Пароль (пусто = авто): " pass < /dev/tty
     if [ -z "$pass" ]; then
         pass=$(openssl rand -base64 24 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
         info "Сгенерирован пароль: $pass"
     fi
 
-    # Название подключения
+    # ── Название подключения ───────────────────────────────────────
     local conn_name
     read -rp "  Название подключения [Hysteria2]: " conn_name < /dev/tty
     conn_name="${conn_name:-Hysteria2}"
 
-    # Masquerade
+    # ── Masquerade ─────────────────────────────────────────────────
     echo ""
     echo -e "  ${WHITE}Режим маскировки:${NC}"
     echo "  ┌─────────────────────────────────────────────────────────────┐"
@@ -2959,13 +3036,12 @@ HTML
     [ "$masq_type" = "proxy" ] && ok "Маскировка: proxy → $masq_url" \
                                 || ok "Маскировка: file → /var/www/html"
 
-    # Алгоритм скорости
+    # ── Алгоритм скорости ──────────────────────────────────────────
     echo ""
     echo -e "  ${WHITE}Алгоритм контроля скорости:${NC}"
     echo "  [1] BBR    — стандартный, рекомендуется для стабильных каналов"
     echo "  [2] Brutal — агрессивный, для нестабильных каналов / мобильного"
-    local speed_mode use_brutal bw_up bw_down
-    use_brutal=false
+    local speed_mode use_brutal=false bw_up bw_down
     read -rp "  Выбор [1]: " speed_mode < /dev/tty
     speed_mode="${speed_mode:-1}"
     if [ "$speed_mode" = "2" ]; then
@@ -2978,12 +3054,11 @@ HTML
         ok "BBR (по умолчанию)"
     fi
 
-    # Обновление системы и зависимости
-    step "Обновление системы и установка зависимостей"
-    apt-get update -y && apt-get upgrade -y
-    apt-get install -y curl ca-certificates openssl qrencode dnsutils
+    # ── Зависимости ────────────────────────────────────────────────
+    step "Установка зависимостей"
+    apt-get update -y -q && apt-get install -y -q curl ca-certificates openssl qrencode dnsutils
 
-    # Проверка DNS
+    # ── Проверка DNS ───────────────────────────────────────────────
     step "Проверка DNS"
     local server_ip domain_ips
     server_ip=$(hy_get_public_ip || true)
@@ -2993,20 +3068,20 @@ HTML
     [ -z "$domain_ips" ] && { err "Домен $domain не резолвится. Создайте A-запись → $server_ip"; return 1; }
     echo "  A-записи: $(echo "$domain_ips" | tr '\n' ' ')"
     if ! echo "$domain_ips" | grep -qx "$server_ip"; then
-        warn "Домен не указывает на этот сервер!"
+        warn "Домен не указывает на этот сервер ($server_ip)!"
         local fc; read -rp "  Продолжить принудительно? (y/N): " fc < /dev/tty
         [[ "${fc:-N}" =~ ^[yY]$ ]] || { warn "Исправьте DNS и запустите снова"; return 1; }
     else
-        ok "DNS корректен"
+        ok "DNS корректен: $domain → $server_ip"
     fi
 
-    # Установка Hysteria2
+    # ── Установка бинарника ────────────────────────────────────────
     step "Установка Hysteria2"
-    bash <(curl -fsSL https://get.hy2.sh/)
+    bash <(curl -fsSL https://get.hy2.sh/) || { err "Ошибка установки"; return 1; }
     command -v hysteria &>/dev/null || { err "Бинарник hysteria не найден"; return 1; }
-    ok "Hysteria2 установлен: $(command -v hysteria)"
+    ok "Hysteria2 установлен: $(hysteria version 2>/dev/null | grep Version | awk '{print $2}')"
 
-    # Конфиг
+    # ── Конфиг ────────────────────────────────────────────────────
     step "Запись конфигурации"
     install -d -m 0755 "$HYSTERIA_DIR"
     local acme_email_line=""
@@ -3033,7 +3108,7 @@ bandwidth:
     fi
 
     cat > "$HYSTERIA_CONFIG" << EOF
-listen: 0.0.0.0:${port}
+listen: ${listen_addr}
 
 acme:
   type: http
@@ -3057,42 +3132,51 @@ quic:
 EOF
     ok "Конфигурация записана: $HYSTERIA_CONFIG"
 
-    # Сервис
+    # ── Сервис ─────────────────────────────────────────────────────
     systemctl daemon-reload
-    # Открываем порт 80 для ACME HTTP-01 challenge
-    if command -v ufw &>/dev/null; then
-        ufw allow 80/tcp >/dev/null 2>&1
-        ufw --force enable >/dev/null 2>&1
-        ok "UFW: временно открыт порт 80 для получения сертификата"
-    fi
+    command -v ufw &>/dev/null && ufw allow 80/tcp >/dev/null 2>&1 && ufw --force enable >/dev/null 2>&1
+    ok "UFW: временно открыт порт 80 для ACME"
     systemctl enable --now "$HYSTERIA_SVC"
-    # Ждём получения сертификата (до 30 сек)
+
+    # Ждём сертификат
+    info "Ждём получения сертификата..."
     local i=0
     while [ $i -lt 30 ]; do
-        if journalctl -u "$HYSTERIA_SVC" -n 20 --no-pager 2>/dev/null | grep -q "server up and running"; then
-            break
-        fi
+        journalctl -u "$HYSTERIA_SVC" -n 20 --no-pager 2>/dev/null | grep -q "server up and running" && break
         sleep 1; i=$((i+1))
     done
-    # Закрываем порт 80
-    if command -v ufw &>/dev/null; then
-        ufw delete allow 80/tcp >/dev/null 2>&1
-        ok "UFW: порт 80 закрыт"
-    fi
+    command -v ufw &>/dev/null && ufw delete allow 80/tcp >/dev/null 2>&1
+    ok "UFW: порт 80 закрыт"
     ok "Сервис $HYSTERIA_SVC запущен"
 
-    # UFW
+    # ── UFW ────────────────────────────────────────────────────────
     if command -v ufw &>/dev/null; then
-        ufw allow 22/tcp        >/dev/null 2>&1
-        ufw allow "${port}/udp" >/dev/null 2>&1
-        ufw allow "${port}/tcp" >/dev/null 2>&1
-        ufw --force enable      >/dev/null 2>&1
-        ok "UFW: открыт ${port}/udp и ${port}/tcp"
+        ufw allow 22/tcp >/dev/null 2>&1
+        if [ "$port_mode" = "2" ]; then
+            ufw allow "${port_hop_start}:${port_hop_end}/udp" >/dev/null 2>&1
+            ok "UFW: открыт диапазон ${port_hop_start}-${port_hop_end}/udp"
+        else
+            ufw allow "${port}/udp" >/dev/null 2>&1
+            ufw allow "${port}/tcp" >/dev/null 2>&1
+            ok "UFW: открыт ${port}/udp и ${port}/tcp"
+        fi
+        ufw --force enable >/dev/null 2>&1
     fi
 
-    # URI и файлы
+    # ── Проверка сертификата ───────────────────────────────────────
+    sleep 3
+    local cert_expiry=""
+    local cert_path="/var/lib/hysteria/acme/certificates/acme-v02.api.letsencrypt.org-directory/${domain}/${domain}.crt"
+    if [ -f "$cert_path" ]; then
+        cert_expiry=$(openssl x509 -enddate -noout -in "$cert_path" 2>/dev/null | cut -d= -f2 || true)
+        [ -n "$cert_expiry" ] && ok "Сертификат действует до: $cert_expiry"
+    fi
+
+    # ── URI и файлы ────────────────────────────────────────────────
     local uri txt_file yaml_file qr_file
-    uri="hy2://${username}:${pass}@${domain}:${port}?sni=${domain}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
+    local uri_port="$port"
+    [ "$port_mode" = "2" ] && uri_port="${port_hop_start}-${port_hop_end}"
+    uri="hy2://${username}:${pass}@${domain}:${uri_port}?sni=${domain}&alpn=h3&insecure=0&allowInsecure=0#${conn_name}"
     txt_file="/root/hysteria-${domain}.txt"
     yaml_file="/root/hysteria-${domain}.yaml"
     qr_file="/root/hysteria-${domain}.png"
@@ -3105,13 +3189,14 @@ proxies:
     type: hysteria2
     server: ${domain}
     port: ${port}
+$([ "$port_mode" = "2" ] && echo "    ports: ${port_hop_start}-${port_hop_end}")
     username: ${username}
     password: "${pass}"
     sni: ${domain}
     alpn:
       - h3
     skip-cert-verify: false
-$(${use_brutal} && echo "    up: \"${bw_up} mbps\"" && echo "    down: \"${bw_down} mbps\"")
+$($use_brutal && echo "    up: \"${bw_up} mbps\"" && echo "    down: \"${bw_down} mbps\"")
 
 proxy-groups:
   - name: Proxy
@@ -3125,16 +3210,19 @@ EOF
 
     qrencode -o "$qr_file" -s 8 "$uri" 2>/dev/null && ok "QR PNG: $qr_file"
 
-    # Итог
+    # ── Итог ───────────────────────────────────────────────────────
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║          ✅  Hysteria2 установлен успешно!               ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${WHITE}Сервер:${NC}    ${domain}:${port}"
+    echo -e "  ${WHITE}Сервер:${NC}    ${domain}:${uri_port}"
     echo -e "  ${WHITE}Логин:${NC}     ${username}"
     echo -e "  ${WHITE}Пароль:${NC}    ${pass}"
-    echo -e "  ${WHITE}Алгоритм:${NC}  $($use_brutal && echo "Brutal ↓${bw_down}/↑${bw_up} Mbps" || echo "BBR")"
+    echo -e "  ${WHITE}Режим:${NC}     $( [ "$port_mode" = "2" ] && echo "Port Hopping ${port_hop_start}-${port_hop_end}" || echo "Один порт" )"
+    echo -e "  ${WHITE}IPv6:${NC}      $( $use_ipv6 && echo "включён" || echo "выключен" )"
+    echo -e "  ${WHITE}Алгоритм:${NC}  $( $use_brutal && echo "Brutal ↓${bw_down}/↑${bw_up} Mbps" || echo "BBR" )"
+    [ -n "$cert_expiry" ] && echo -e "  ${WHITE}SSL до:${NC}    ${cert_expiry}"
     echo ""
     echo -e "  ${CYAN}URI:${NC}"
     echo "  $uri"
@@ -3146,10 +3234,6 @@ EOF
     echo ""
     echo "  QR-код:"
     qrencode -t ANSIUTF8 "$uri" 2>/dev/null || true
-    echo ""
-    echo -e "  ${YELLOW}Добавить пользователя:${NC}"
-    echo "    nano $HYSTERIA_CONFIG"
-    echo "    systemctl restart $HYSTERIA_SVC"
 }
 
 # ── Статус ────────────────────────────────────────────────────────
