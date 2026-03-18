@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>setup.sh — документация</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Unbounded:wght@700;900&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #080b0f;
+  --bg2:     #0d1117;
+  --bg3:     #131a22;
+  --bg4:     #1a2332;
+  --border:  #1e2a38;
+  --border2: #253447;
+  --accent:  #3b82f6;
+  --accent2: #6366f1;
+  --green:   #22c55e;
+  --amber:   #f59e0b;
+  --red:     #ef4444;
+  --purple:  #a78bfa;
+  --cyan:    #22d3ee;
+  --text:    #e2e8f0;
+  --text2:   #8b9ab0;
+  --text3:   #3d5068;
+  --mono:    'JetBrains Mono', monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;font-size:15px;line-height:1.75;min-height:100vh}
+
+/* Grid bg */
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:48px 48px;opacity:.35;pointer-events:none;z-index:0}
+
+/* Hero */
+.hero{position:relative;padding:88px 40px 64px;text-align:center;border-bottom:1px solid var(--border);overflow:hidden;z-index:1}
+.hero::before{content:'';position:absolute;top:-80px;left:50%;transform:translateX(-50%);width:700px;height:420px;background:radial-gradient(ellipse at 50% 50%,rgba(59,130,246,.15) 0%,transparent 65%);pointer-events:none}
+.hero::after{content:'';position:absolute;bottom:-1px;left:0;right:0;height:80px;background:linear-gradient(transparent,var(--bg));pointer-events:none}
+
+.tag{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--accent);border:1px solid rgba(59,130,246,.3);padding:4px 14px;border-radius:20px;margin-bottom:28px;letter-spacing:2px;text-transform:uppercase;background:rgba(59,130,246,.06)}
+.tag::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.hero h1{font-family:'Unbounded',sans-serif;font-size:clamp(36px,5vw,60px);font-weight:900;line-height:1.05;letter-spacing:-2px;background:linear-gradient(160deg,#fff 20%,var(--accent) 70%,var(--accent2) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:18px}
+.hero p{color:var(--text2);font-size:16px;max-width:520px;margin:0 auto 36px}
+
+.cmd-wrap{display:inline-flex;flex-direction:column;gap:8px;align-items:center}
+.cmd{display:inline-flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:13px 22px;font-family:var(--mono);font-size:13.5px;color:var(--green)}
+.cmd .ps{color:var(--text3)}
+.copy-btn{background:none;border:1px solid var(--border2);color:var(--text2);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:var(--mono);font-size:11px;transition:.2s;white-space:nowrap}
+.copy-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* Layout */
+.layout{display:grid;grid-template-columns:260px 1fr;max-width:1240px;margin:0 auto;position:relative;z-index:1}
+
+/* Sidebar */
+.sidebar{position:sticky;top:0;height:100vh;overflow-y:auto;padding:36px 20px;border-right:1px solid var(--border);scrollbar-width:none}
+.sidebar::-webkit-scrollbar{display:none}
+.nav-group{margin-bottom:28px}
+.nav-label{font-family:var(--mono);font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px;padding:0 10px}
+.nav-link{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:7px;color:var(--text2);text-decoration:none;font-size:13px;font-weight:500;transition:.15s;margin-bottom:1px}
+.nav-link:hover{background:var(--bg3);color:var(--text)}
+.nav-link.active{background:rgba(59,130,246,.1);color:var(--accent)}
+.nav-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+
+/* Content */
+.content{padding:44px 52px 120px;min-width:0}
+
+/* Sections */
+.section{margin-bottom:80px;scroll-margin-top:28px}
+.sec-head{display:flex;align-items:center;gap:14px;margin-bottom:32px;padding-bottom:18px;border-bottom:1px solid var(--border)}
+.sec-icon{width:44px;height:44px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0}
+.sec-title{font-family:'Unbounded',sans-serif;font-size:21px;font-weight:700;letter-spacing:-.5px}
+
+h3{font-size:15px;font-weight:700;color:var(--text);margin:32px 0 14px;display:flex;align-items:center;gap:10px}
+h3::before{content:'';width:3px;height:17px;background:linear-gradient(var(--accent),var(--accent2));border-radius:2px;flex-shrink:0}
+
+p{color:var(--text2);margin-bottom:16px}
+
+/* Code */
+.code-block{background:var(--bg2);border:1px solid var(--border2);border-radius:11px;overflow:hidden;margin:16px 0;font-family:var(--mono)}
+.code-head{display:flex;align-items:center;justify-content:space-between;padding:9px 15px;border-bottom:1px solid var(--border);background:rgba(255,255,255,.02)}
+.dots{display:flex;gap:6px}.dot{width:11px;height:11px;border-radius:50%}
+.d-r{background:#ef4444}.d-y{background:#f59e0b}.d-g{background:#22c55e}
+.code-lang{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+pre{padding:18px 20px;overflow-x:auto;font-size:13px;line-height:1.75;color:#94b8d8}
+code{font-family:var(--mono);font-size:13px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.18);color:var(--accent);padding:2px 7px;border-radius:5px;white-space:nowrap}
+pre code{background:none;border:none;padding:0;color:inherit}
+.cm{color:#3d5068}.cs{color:#fcd34d}.ck{color:#c084fc}.cf{color:#34d399}.cn{color:#f97316}
+
+/* Tables */
+.table-wrap{overflow-x:auto;margin:16px 0;border-radius:10px;border:1px solid var(--border2)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+thead tr{background:rgba(255,255,255,.025);border-bottom:1px solid var(--border2)}
+th{padding:11px 16px;text-align:left;font-family:var(--mono);font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);color:var(--text2);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:rgba(255,255,255,.015)}
+td:first-child{font-family:var(--mono);font-size:12.5px;color:var(--cyan);white-space:nowrap}
+
+/* Cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:13px;margin:20px 0}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:13px;padding:22px;transition:.2s}
+.card:hover{border-color:var(--border2)}
+.card-ico{font-size:26px;margin-bottom:11px}
+.card-title{font-family:'Unbounded',sans-serif;font-size:12.5px;font-weight:700;margin-bottom:7px;color:var(--text)}
+.card-desc{font-size:12.5px;color:var(--text2);line-height:1.55}
+
+/* Alerts */
+.alert{border-radius:10px;padding:13px 17px;margin:16px 0;display:flex;gap:11px;align-items:flex-start;font-size:14px}
+.alert-icon{font-size:17px;flex-shrink:0;margin-top:1px}
+.al-warn{background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);color:#fcd34d}
+.al-info{background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.22);color:#93c5fd}
+.al-danger{background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.22);color:#fca5a5}
+.al-success{background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.22);color:#86efac}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;font-size:11px;font-family:var(--mono);padding:2px 8px;border-radius:5px;font-weight:500;white-space:nowrap}
+.b-blue{background:rgba(59,130,246,.12);color:#60a5fa;border:1px solid rgba(59,130,246,.25)}
+.b-green{background:rgba(34,197,94,.1);color:#4ade80;border:1px solid rgba(34,197,94,.25)}
+.b-amber{background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.25)}
+.b-red{background:rgba(239,68,68,.1);color:#f87171;border:1px solid rgba(239,68,68,.25)}
+.b-purple{background:rgba(167,139,250,.1);color:#c4b5fd;border:1px solid rgba(167,139,250,.25)}
+.b-gray{background:rgba(139,154,176,.08);color:var(--text2);border:1px solid var(--border2)}
+
+/* Terminal */
+.term{background:#000;border:1px solid #1a2535;border-radius:11px;overflow:hidden;margin:16px 0;font-family:var(--mono)}
+.term-bar{background:#111820;padding:9px 15px;display:flex;align-items:center;gap:7px;border-bottom:1px solid #1a2535}
+.term-bar .dot{width:11px;height:11px;border-radius:50%}
+.term-title{font-size:11px;color:#3d5068;margin-left:6px;flex:1;text-align:center}
+.term-body{padding:18px 20px;font-size:13px;line-height:1.9}
+.tc{color:#6366f1}.tg{color:#22c55e}.ty{color:#f59e0b}.tr{color:#8b9ab0}.tb{color:#3b82f6}.tw{color:#e2e8f0}.td{color:#3d5068}.tp{color:#a78bfa}
+
+/* Steps */
+.steps{margin:20px 0}
+.step{display:flex;gap:16px;margin-bottom:28px}
+.step-n{width:32px;height:32px;border-radius:50%;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);display:flex;align-items:center;justify-content:center;font-family:'Unbounded',sans-serif;font-size:12px;font-weight:700;color:var(--accent);flex-shrink:0;margin-top:2px}
+.step-body{flex:1}
+.step-title{font-weight:700;color:var(--text);margin-bottom:9px;font-size:15px}
+
+/* Divider */
+.divider{height:1px;background:linear-gradient(90deg,transparent,var(--border2),transparent);margin:56px 0}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* Cookie path viz */
+.cookie-flow{display:flex;align-items:center;gap:0;margin:20px 0;overflow-x:auto;padding:4px 0}
+.cf-step{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:110px}
+.cf-box{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:9px 14px;font-family:var(--mono);font-size:12px;text-align:center;color:var(--text2);width:100%}
+.cf-box.active{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.07);color:var(--accent)}
+.cf-box.green{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.06);color:var(--green)}
+.cf-arrow{color:var(--text3);font-size:20px;padding:0 6px;align-self:center;margin-top:-16px}
+.cf-label{font-size:11px;color:var(--text3);text-align:center}
+
+/* rp commands grid */
+.rp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin:16px 0}
+.rp-cmd{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 14px;display:flex;flex-direction:column;gap:4px}
+.rp-name{font-family:var(--mono);font-size:13px;color:var(--cyan)}
+.rp-desc{font-size:12px;color:var(--text2)}
+
+/* Compat table */
+.compat td:nth-child(2){text-align:center}
+
+@media(max-width:768px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .content{padding:24px 20px}
+  .hero{padding:52px 20px 44px}
+  .cmd{font-size:12px}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="tag">v2603 · unified management</div>
+  <h1>setup.sh</h1>
+  <p>Единый скрипт установки и управления VPN-инфраструктурой. Один файл — полный контроль над сервером.</p>
+  <div class="cmd-wrap">
+    <div class="cmd">
+      <span class="ps">$</span>
+      <span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/stump3/setup_rth/main/setup.sh -o setup.sh && bash setup.sh</span>
+      <button class="copy-btn" onclick="copyCmd()">copy</button>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+<nav class="sidebar">
+  <div class="nav-group">
+    <div class="nav-label">Начало</div>
+    <a href="#overview" class="nav-link"><span class="nav-dot" style="background:#3b82f6"></span> Обзор</a>
+    <a href="#menu" class="nav-link"><span class="nav-dot" style="background:#6366f1"></span> Главное меню</a>
+    <a href="#start" class="nav-link"><span class="nav-dot" style="background:#22c55e"></span> Быстрый старт</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Компоненты</div>
+    <a href="#panel" class="nav-link"><span class="nav-dot" style="background:#3b82f6"></span> Remnawave Panel</a>
+    <a href="#mtproxy" class="nav-link"><span class="nav-dot" style="background:#a78bfa"></span> MTProxy</a>
+    <a href="#hysteria" class="nav-link"><span class="nav-dot" style="background:#22d3ee"></span> Hysteria2</a>
+    <a href="#migrate" class="nav-link"><span class="nav-dot" style="background:#f59e0b"></span> Перенос</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Справочник</div>
+    <a href="#files" class="nav-link"><span class="nav-dot" style="background:#3d5068"></span> Файлы и пути</a>
+    <a href="#manual" class="nav-link"><span class="nav-dot" style="background:#3d5068"></span> Ручное управление</a>
+    <a href="#troubleshoot" class="nav-link"><span class="nav-dot" style="background:#ef4444"></span> Диагностика</a>
+    <a href="#requirements" class="nav-link"><span class="nav-dot" style="background:#3d5068"></span> Требования</a>
+  </div>
+</nav>
+
+<main class="content">
+
+<!-- ОБЗОР -->
+<section class="section" id="overview">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2)">🗺</div>
+    <div class="sec-title">Обзор</div>
+  </div>
+
+  <p>Три независимых VPN-компонента под одним скриптом. Каждый устанавливается, управляется и мигрирует отдельно — или все вместе.</p>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-ico">🛡️</div>
+      <div class="card-title">Remnawave Panel</div>
+      <div class="card-desc">VPN-панель на eGames архитектуре. Xray/Reality, cookie-защита входа, Docker Compose.</div>
+    </div>
+    <div class="card">
+      <div class="card-ico">📡</div>
+      <div class="card-title">MTProxy</div>
+      <div class="card-desc">Telegram MTProto прокси на Rust. systemd или Docker, hot reload без разрыва соединений.</div>
+    </div>
+    <div class="card">
+      <div class="card-ico">🚀</div>
+      <div class="card-title">Hysteria2</div>
+      <div class="card-desc">Высокоскоростной VPN поверх QUIC/UDP. Эффективен при потерях пакетов и нестабильном канале.</div>
+    </div>
+    <div class="card">
+      <div class="card-ico">📦</div>
+      <div class="card-title">Перенос</div>
+      <div class="card-desc">Миграция любого компонента или всего стека на новый сервер через SSH + пароль.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ГЛАВНОЕ МЕНЮ -->
+<section class="section" id="menu">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.2)">🗂</div>
+    <div class="sec-title">Главное меню</div>
+  </div>
+
+  <p>При запуске скрипт показывает статус всех компонентов и предлагает меню выбора.</p>
+
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">setup.sh</div></div>
+    <div class="term-body">
+<span class="td">  ╔══════════════════════════════════════════════════════════╗</span><br>
+<span class="td">  ║ </span><span class="tw">🛠️  SERVER SETUP — Unified Management</span><span class="td">                  ║</span><br>
+<span class="td">  ╚══════════════════════════════════════════════════════════╝</span><br><br>
+<span class="td">  Remnawave Panel:  </span><span class="tg">● установлена</span><br>
+<span class="td">  MTProxy (telemt): </span><span class="tg">● запущен (systemd)</span><br>
+<span class="td">  Hysteria2:        </span><span class="tr">○ не установлена</span><br><br>
+<span class="td">  </span><span class="tw">1)</span><span class="tb"> 🛡️  Remnawave Panel</span><br>
+<span class="td">  </span><span class="tw">2)</span><span class="tp"> 📡  MTProxy (telemt)</span><br>
+<span class="td">  </span><span class="tw">3)</span><span class="tc"> 🚀  Hysteria2</span><br>
+<span class="td">  </span><span class="tw">4)</span><span class="ty"> 📦  Перенос</span><br>
+<span class="td">  </span><span class="tw">0)</span><span class="tr"> Выход</span>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Статус</th><th>Значение</th></tr></thead>
+      <tbody>
+        <tr><td>● запущен</td><td>Сервис активен и работает</td></tr>
+        <tr><td>◐ остановлен</td><td>Установлен, но не запущен</td></tr>
+        <tr><td>○ не установлен</td><td>Компонент отсутствует</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- БЫСТРЫЙ СТАРТ -->
+<section class="section" id="start">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2)">⚡</div>
+    <div class="sec-title">Быстрый старт</div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <div class="step-title">Подключитесь по SSH</div>
+        <div class="code-block"><div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+        <pre>ssh root@YOUR_SERVER_IP</pre></div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <div class="step-title">Скачайте и запустите скрипт</div>
+        <div class="code-block"><div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+        <pre>curl -fsSL https://raw.githubusercontent.com/stump3/setup_rth/main/setup.sh \
+  -o setup.sh
+
+bash setup.sh</pre></div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-n">3</div>
+      <div class="step-body">
+        <div class="step-title">Выберите компонент в меню</div>
+        <p>Скрипт покажет статусы и предложит список действий. Каждый компонент устанавливается независимо.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- REMNAWAVE PANEL -->
+<section class="section" id="panel">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2)">🛡️</div>
+    <div class="sec-title">Remnawave Panel</div>
+  </div>
+
+  <p>VPN-панель управления. Архитектура eGames: nginx в <code>network_mode: host</code>, Xray (remnanode) принимает Reality-трафик на порту 443. Доступ в панель защищён cookie-ключом.</p>
+
+  <h3>Подменю</h3>
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">Remnawave Panel</div></div>
+    <div class="term-body">
+<span class="tw">  1)</span><span class="tb"> Установить</span><br>
+<span class="tw">  2)</span><span class="tr"> Управление (remnawave_panel)</span><br>
+<span class="tw">  0)</span><span class="td"> Назад</span>
+    </div>
+  </div>
+
+  <h3>Параметры установки</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Параметр</th><th>Пример</th><th>Описание</th></tr></thead>
+      <tbody>
+        <tr><td>Режим</td><td>1 / 2</td><td>1 — панель + нода, 2 — только панель</td></tr>
+        <tr><td>Домен панели</td><td>panel.example.com</td><td>Основной домен</td></tr>
+        <tr><td>Домен подписок</td><td>sub.example.com</td><td>Для клиентских конфигов</td></tr>
+        <tr><td>Домен selfsteal</td><td>node.example.com</td><td>Для Reality</td></tr>
+        <tr><td>Метод SSL</td><td>1 / 2 / 3</td><td>Cloudflare / ACME standalone / Gcore</td></tr>
+        <tr><td>Логин суперадмина</td><td><span class="badge b-blue">авто</span></td><td>Случайные 8 букв <code>[a-zA-Z]{8}</code>, генерируется автоматически</td></tr>
+        <tr><td>Пароль суперадмина</td><td><span class="badge b-blue">авто</span></td><td>Случайный, генерируется автоматически</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert al-danger">
+    <span class="alert-icon">🔐</span>
+    <div><strong>Сохраните логин, пароль и URL с cookie-ключом.</strong> Логин и пароль генерируются автоматически — восстановить их нельзя. Без cookie-URL войти в панель невозможно.<br><br>
+    <code>https://panel.example.com/auth/login?KEY=VAL</code></div>
+  </div>
+
+  <h3>Как работает cookie-защита</h3>
+  <p>При установке генерируются два случайных слова — они вшиваются в <code>nginx.conf</code> как имя и значение cookie:</p>
+
+  <div class="cookie-flow">
+    <div class="cf-step">
+      <div class="cf-box active">Первый переход<br><span style="font-size:11px;color:var(--text3)">?KEY=VAL в URL</span></div>
+      <div class="cf-label">Браузер</div>
+    </div>
+    <div class="cf-arrow">→</div>
+    <div class="cf-step">
+      <div class="cf-box active">nginx проверяет<br><span style="font-size:11px;color:var(--text3)">$arg_KEY = VAL?</span></div>
+      <div class="cf-label">nginx</div>
+    </div>
+    <div class="cf-arrow">→</div>
+    <div class="cf-step">
+      <div class="cf-box green">Set-Cookie<br><span style="font-size:11px">KEY=VAL; 1 год</span></div>
+      <div class="cf-label">Ответ</div>
+    </div>
+    <div class="cf-arrow">→</div>
+    <div class="cf-step">
+      <div class="cf-box green">Cookie в браузере<br><span style="font-size:11px">URL больше не нужен</span></div>
+      <div class="cf-label">Последующие запросы</div>
+    </div>
+  </div>
+
+  <p>KEY и VAL — это <code>[a-zA-Z]{8}</code>, два независимых случайных слова. Nginx проверяет <em>или</em> наличие cookie, <em>или</em> наличие query-параметра — достаточно одного.</p>
+
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">nginx</span></div>
+    <pre><span class="cm"># nginx.conf — как это выглядит внутри</span>
+map $http_cookie $auth_cookie {
+    default 0;
+    <span class="cs">"~*xKtBpWnR=mQaYjZvL"</span> 1;   <span class="cm"># авторизован по cookie</span>
+}
+map $arg_xKtBpWnR $auth_query {
+    default 0;
+    <span class="cs">"mQaYjZvL"</span> 1;               <span class="cm"># авторизован по query</span>
+}
+map <span class="cs">"$auth_cookie$auth_query"</span> $authorized {
+    <span class="cs">"~1"</span> 1;   <span class="cm"># хотя бы одно совпало</span>
+    default 0;
+}</pre>
+  </div>
+
+  <div class="alert al-info">
+    <span class="alert-icon">💡</span>
+    <div>Если URL потерян — откройте прямой доступ командой <code>rp open_port</code>, затем восстановите KEY и VAL из конфига:<br>
+    <code>grep -A2 "map \$arg_" /opt/remnawave/nginx.conf | head -4</code></div>
+  </div>
+
+  <h3>Команды управления <code>rp</code></h3>
+  <div class="rp-grid">
+    <div class="rp-cmd"><span class="rp-name">rp</span><span class="rp-desc">Интерактивное меню</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp status</span><span class="rp-desc">Статус контейнеров</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp logs [svc]</span><span class="rp-desc">Логи: panel / nginx / sub / node</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp restart [svc]</span><span class="rp-desc">Перезапуск: all / nginx / panel / sub / node</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp ssl</span><span class="rp-desc">Обновить SSL-сертификат</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp backup</span><span class="rp-desc">Бэкап БД и конфигов</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp health</span><span class="rp-desc">Диагностика сервисов</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp open_port</span><span class="rp-desc">Открыть порт 8443 (восстановление)</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp close_port</span><span class="rp-desc">Закрыть порт 8443</span></div>
+    <div class="rp-cmd"><span class="rp-name">rp migrate</span><span class="rp-desc">Перенос на другой сервер</span></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- MTPROXY -->
+<section class="section" id="mtproxy">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.2)">📡</div>
+    <div class="sec-title">MTProxy (telemt)</div>
+  </div>
+
+  <p>Telegram MTProto прокси на Rust. Поддерживает ограничения на пользователей, hot reload без разрыва соединений.</p>
+
+  <div class="alert al-info">
+    <span class="alert-icon">ℹ️</span>
+    <div>При входе в раздел MTProxy — если сервис уже запущен, режим (systemd/Docker) определяется <strong>автоматически</strong>, меню выбора пропускается.</div>
+  </div>
+
+  <h3>Подменю</h3>
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">MTProxy</div></div>
+    <div class="term-body">
+<span class="tw">  1)</span><span class="tp"> Установить</span><br>
+<span class="tw">  2)</span><span class="tp"> Добавить пользователя</span><br>
+<span class="tw">  3)</span><span class="tp"> Пользователи и ссылки</span><br>
+<span class="tw">  4)</span><span class="tp"> Статус и логи</span><br>
+<span class="tw">  5)</span><span class="tp"> Обновить</span><br>
+<span class="tw">  6)</span><span class="tp"> Остановить</span><br>
+<span class="tw">  7)</span><span class="tp"> Мигрировать на новый сервер</span><span class="td">  (только systemd)</span><br>
+<span class="tw">  8)</span><span class="tp"> Сменить режим (systemd ↔ Docker)</span><br>
+<span class="tw">  0)</span><span class="td"> Назад</span>
+    </div>
+  </div>
+
+  <h3>Режимы запуска</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Режим</th><th>Плюсы</th><th>Когда выбирать</th></tr></thead>
+      <tbody>
+        <tr><td>systemd <span class="badge b-green">рекомендуется</span></td><td>Hot reload, меньше RAM, миграция</td><td>По умолчанию</td></tr>
+        <tr><td>Docker</td><td>Изоляция, простое обновление</td><td>Если уже используете Docker-стек</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Параметры установки</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Параметр</th><th>По умолчанию</th><th>Описание</th></tr></thead>
+      <tbody>
+        <tr><td>Порт</td><td>8443</td><td>Telegram: 443, 8443, 2053, 2083, 2087, 2096</td></tr>
+        <tr><td>Домен-маскировка</td><td>petrovich.ru</td><td>Любой крупный HTTPS-сайт</td></tr>
+        <tr><td>Имя пользователя</td><td>—</td><td>Минимум один при установке</td></tr>
+        <tr><td>Секрет</td><td><span class="badge b-blue">авто</span></td><td>32 hex-символа</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Ограничения на пользователей</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Параметр</th><th>Описание</th></tr></thead>
+      <tbody>
+        <tr><td>max_tcp_conns</td><td>Максимум одновременных подключений</td></tr>
+        <tr><td>max_unique_ips</td><td>Максимум уникальных IP-адресов</td></tr>
+        <tr><td>data_quota_bytes</td><td>Квота трафика в ГБ</td></tr>
+        <tr><td>expiration_rfc3339</td><td>Срок действия в днях</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert al-success">
+    <span class="alert-icon">✅</span>
+    <div>Добавление пользователя применяется через hot reload — существующие соединения не прерываются.</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- HYSTERIA2 -->
+<section class="section" id="hysteria">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.2)">🚀</div>
+    <div class="sec-title">Hysteria2</div>
+  </div>
+
+  <p>Высокоскоростной VPN поверх QUIC/UDP. Эффективен на нестабильных каналах и при высоких потерях пакетов.</p>
+
+  <div class="alert al-warn">
+    <span class="alert-icon">⚠️</span>
+    <div>Требуется отдельный домен с A-записью на IP сервера (например <code>cdn.example.com</code>).<br>
+    Порт 80/tcp — скрипт открывает <strong>автоматически</strong> перед получением сертификата и закрывает после.</div>
+  </div>
+
+  <h3>Совместимость</h3>
+  <div class="table-wrap compat">
+    <table>
+      <thead><tr><th>Компонент</th><th>Конфликт</th><th>Решение</th></tr></thead>
+      <tbody>
+        <tr><td>Xray/Reality UDP 443</td><td><span class="badge b-amber">⚠ есть</span></td><td>Выбрать другой порт — скрипт проверит автоматически</td></tr>
+        <tr><td>nginx TCP 80/443</td><td><span class="badge b-gray">частично</span></td><td>Порт 80 открывается временно только для ACME</td></tr>
+        <tr><td>MTProxy 2053/8443</td><td><span class="badge b-gray">частично</span></td><td>Скрипт показывает занятые порты в меню</td></tr>
+        <tr><td>certbot / Let's Encrypt</td><td><span class="badge b-green">нет</span></td><td>Hysteria использует собственный ACME-клиент</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Параметры установки</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Параметр</th><th>По умолчанию</th><th>Описание</th></tr></thead>
+      <tbody>
+        <tr><td>Домен</td><td>—</td><td>FQDN вида <code>cdn.example.com</code> с A-записью на сервер</td></tr>
+        <tr><td>Email</td><td>—</td><td>Для ACME-уведомлений, необязателен</td></tr>
+        <tr><td>CA</td><td>Let's Encrypt</td><td>Центр сертификации</td></tr>
+        <tr><td>Порт</td><td>8443</td><td>UDP — скрипт проверяет занятость в реальном времени</td></tr>
+        <tr><td>Логин</td><td>—</td><td>Имя пользователя (вводится вручную)</td></tr>
+        <tr><td>Пароль</td><td><span class="badge b-blue">авто</span></td><td>Генерируется если не указан</td></tr>
+        <tr><td>Название</td><td>Hysteria2</td><td>Отображается в URI и клиенте (например: 🇩🇪 Germany Hysteria2)</td></tr>
+        <tr><td>Masquerade</td><td>bing.com</td><td>Режим маскировки трафика</td></tr>
+        <tr><td>Алгоритм</td><td>BBR</td><td>BBR или Brutal</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Выбор CA</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>CA</th><th>Срок</th><th>Когда использовать</th></tr></thead>
+      <tbody>
+        <tr><td>Let's Encrypt <span class="badge b-green">рекомендуется</span></td><td>90 дней</td><td>По умолчанию</td></tr>
+        <tr><td>ZeroSSL</td><td>90 дней</td><td>Если Let's Encrypt заблокирован провайдером</td></tr>
+        <tr><td>Buypass</td><td>180 дней</td><td>Если нужен более долгий срок</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Режимы маскировки</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Вариант</th><th>Тип</th><th>Описание</th></tr></thead>
+      <tbody>
+        <tr><td>bing.com <span class="badge b-green">рекомендуется</span></td><td>proxy</td><td>Поддерживает HTTP/3</td></tr>
+        <tr><td>yahoo.com</td><td>proxy</td><td>Стабильный</td></tr>
+        <tr><td>cdn.apple.com</td><td>proxy</td><td>Нейтральный</td></tr>
+        <tr><td>speed.hetzner.de</td><td>proxy</td><td>Нейтральный</td></tr>
+        <tr><td>/var/www/html</td><td>file</td><td>Локальная заглушка Remnawave</td></tr>
+        <tr><td>Свой URL</td><td>proxy</td><td>Любой HTTP/3 сайт</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Алгоритмы скорости</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Алгоритм</th><th>Когда использовать</th></tr></thead>
+      <tbody>
+        <tr><td>BBR <span class="badge b-green">рекомендуется</span></td><td>Стабильный канал — по умолчанию</td></tr>
+        <tr><td>Brutal</td><td>Нестабильный канал, потери &gt;5%, мобильный интернет. Создаёт до 1.4× нагрузки — следите за трафиком на VPS с лимитом</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Результат установки</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">URI</span></div>
+    <pre>hy2://Login:Pass@cdn.example.com:8443?sni=cdn.example.com&amp;alpn=h3&amp;insecure=0#Germany Hysteria2</pre>
+  </div>
+
+  <p>Файлы сохраняются в <code>/root/</code>:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Файл</th><th>Содержимое</th></tr></thead>
+      <tbody>
+        <tr><td>hysteria-{домен}.txt</td><td>URI подключения</td></tr>
+        <tr><td>hysteria-{домен}.yaml</td><td>Конфиг Clash/Mihomo</td></tr>
+        <tr><td>hysteria-{домен}.png</td><td>QR-код PNG</td></tr>
+        <tr><td>hysteria-{домен}-users.txt</td><td>URI всех добавленных пользователей</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ПЕРЕНОС -->
+<section class="section" id="migrate">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.2)">📦</div>
+    <div class="sec-title">Перенос</div>
+  </div>
+
+  <p>Перенос сервисов на новый сервер через SSH + пароль. <code>sshpass</code> устанавливается автоматически.</p>
+
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">Перенос</div></div>
+    <div class="term-body">
+<span class="tw">  1)</span><span class="ty"> Перенести Remnawave Panel</span><br>
+<span class="tw">  2)</span><span class="ty"> Перенести MTProxy (telemt, только systemd)</span><br>
+<span class="tw">  3)</span><span class="ty"> Перенести Hysteria2</span><br>
+<span class="tw">  4)</span><span class="ty"> Перенести всё (Panel + MTProxy + Hysteria2)</span><br>
+<span class="tw">  0)</span><span class="td"> Назад</span>
+    </div>
+  </div>
+
+  <h3>Мониторинг DNS после переноса Hysteria2</h3>
+  <p>После переноса скрипт предлагает дождаться обновления DNS и автоматически перезапустить:</p>
+  <div class="term">
+    <div class="term-bar"><div class="dot d-r"></div><div class="dot d-y"></div><div class="dot d-g"></div><div class="term-title">DNS monitor</div></div>
+    <div class="term-body">
+<span class="td">  [  1] cdn.example.com → 5.6.7.8 — </span><span class="ty">ожидание......</span><br>
+<span class="td">  [  2] cdn.example.com → 5.6.7.8 — </span><span class="ty">ожидание......</span><br>
+<span class="td">  [  3] cdn.example.com → </span><span class="tg">1.2.3.4</span><br><br>
+<span class="tg">✅ DNS обновлён</span><br>
+<span class="tg">✅ Сервис перезапущен — ACME переиздаст сертификат автоматически</span>
+    </div>
+  </div>
+  <p style="color:var(--text3);font-size:13px">Таймаут ожидания — 60 минут.</p>
+
+  <h3>После переноса — остановить старые сервисы</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>systemctl stop hysteria-server
+systemctl stop telemt
+cd /opt/remnawave && docker compose down</pre>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ФАЙЛЫ -->
+<section class="section" id="files">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(139,154,176,.08);border:1px solid var(--border2)">📁</div>
+    <div class="sec-title">Файлы и пути</div>
+  </div>
+
+  <h3>Hysteria2</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Путь</th><th>Назначение</th></tr></thead>
+      <tbody>
+        <tr><td>/etc/hysteria/config.yaml</td><td>Конфигурация сервера</td></tr>
+        <tr><td>/usr/local/bin/hysteria</td><td>Бинарник</td></tr>
+        <tr><td>/root/hysteria-{домен}.txt</td><td>URI подключения</td></tr>
+        <tr><td>/root/hysteria-{домен}.yaml</td><td>Конфиг Clash/Mihomo</td></tr>
+        <tr><td>/root/hysteria-{домен}.png</td><td>QR-код PNG</td></tr>
+        <tr><td>/root/hysteria-{домен}-users.txt</td><td>URI всех пользователей</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Remnawave Panel</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Путь</th><th>Назначение</th></tr></thead>
+      <tbody>
+        <tr><td>/opt/remnawave/.env</td><td>Конфигурация панели</td></tr>
+        <tr><td>/opt/remnawave/docker-compose.yml</td><td>Docker Compose</td></tr>
+        <tr><td>/opt/remnawave/nginx.conf</td><td>Nginx (cookie-ключ здесь)</td></tr>
+        <tr><td>/opt/remnawave/backups/</td><td>Бэкапы</td></tr>
+        <tr><td>/usr/local/bin/remnawave_panel</td><td>Скрипт управления <code>rp</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>MTProxy (systemd)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Путь</th><th>Назначение</th></tr></thead>
+      <tbody>
+        <tr><td>/usr/local/bin/telemt</td><td>Бинарник</td></tr>
+        <tr><td>/etc/telemt/telemt.toml</td><td>Конфиг</td></tr>
+        <tr><td>/etc/systemd/system/telemt.service</td><td>Systemd-сервис</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- РУЧНОЕ УПРАВЛЕНИЕ -->
+<section class="section" id="manual">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(139,154,176,.08);border:1px solid var(--border2)">⌨️</div>
+    <div class="sec-title">Ручное управление</div>
+  </div>
+
+  <h3>Hysteria2</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>systemctl status hysteria-server
+journalctl -u hysteria-server -f
+systemctl restart hysteria-server
+nano /etc/hysteria/config.yaml</pre>
+  </div>
+
+  <h3>MTProxy</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>systemctl status telemt
+journalctl -u telemt -f
+systemctl reload telemt    <span class="cm"># hot reload без разрыва соединений</span>
+systemctl restart telemt</pre>
+  </div>
+
+  <h3>Remnawave Panel</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>cd /opt/remnawave
+docker compose ps
+docker compose logs -f remnawave
+docker compose restart</pre>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ДИАГНОСТИКА -->
+<section class="section" id="troubleshoot">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2)">🔧</div>
+    <div class="sec-title">Диагностика</div>
+  </div>
+
+  <h3>Hysteria2 не запускается</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>journalctl -u hysteria-server -n 50 --no-pager</pre>
+  </div>
+  <p>Частые причины: порт занят, домен не резолвится, ACME не получил сертификат.</p>
+
+  <h3>ACME не выдаёт сертификат</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre><span class="cm"># Открыть порт 80 и перезапустить</span>
+ufw allow 80/tcp
+systemctl restart hysteria-server
+
+<span class="cm"># Проверить что порт 80 свободен</span>
+ss -tulpn | grep :80
+
+<span class="cm"># Проверить DNS (должны совпадать)</span>
+curl -4 ifconfig.me
+dig +short cdn.example.com</pre>
+  </div>
+
+  <h3>Клиент не подключается</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>systemctl status hysteria-server
+ss -tulpn | grep PORT
+ufw status | grep PORT</pre>
+  </div>
+
+  <h3>Сменить CA после установки</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>nano /etc/hysteria/config.yaml
+<span class="cm"># Изменить строку: ca: zerossl</span>
+systemctl restart hysteria-server</pre>
+  </div>
+
+  <h3>DNS не обновился после переноса</h3>
+  <div class="code-block">
+    <div class="code-head"><div class="dots"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span></div><span class="code-lang">bash</span></div>
+    <pre>dig +short A cdn.example.com
+ssh root@NEW_IP systemctl restart hysteria-server</pre>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ТРЕБОВАНИЯ -->
+<section class="section" id="requirements">
+  <div class="sec-head">
+    <div class="sec-icon" style="background:rgba(139,154,176,.08);border:1px solid var(--border2)">📋</div>
+    <div class="sec-title">Требования</div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
+      <tbody>
+        <tr><td>ОС</td><td>Ubuntu 22.04 / 24.04, Debian 11 / 12</td></tr>
+        <tr><td>Права</td><td>root</td></tr>
+        <tr><td>Hysteria2: домен</td><td>Отдельный от Panel и MTProxy, A-запись на IP сервера</td></tr>
+        <tr><td>Hysteria2: порт 80</td><td>Скрипт открывает автоматически для ACME и закрывает после</td></tr>
+        <tr><td>Panel: порт 443</td><td>Свободен до установки</td></tr>
+        <tr><td>MTProxy: порт</td><td>8443 или другой из списка Telegram</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+function copyCmd(){
+  navigator.clipboard.writeText(document.getElementById('install-cmd').textContent);
+  const btn=document.querySelector('.copy-btn');
+  btn.textContent='✓ скопировано';
+  setTimeout(()=>btn.textContent='copy',2000)
+}
+
+const sections=document.querySelectorAll('.section');
+const links=document.querySelectorAll('.nav-link');
+const obs=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      links.forEach(l=>l.classList.remove('active'));
+      const a=document.querySelector(`.nav-link[href="#${e.target.id}"]`);
+      if(a)a.classList.add('active')
+    }
+  })
+},{threshold:.25,rootMargin:'-60px 0px -60% 0px'});
+sections.forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>
