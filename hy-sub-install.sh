@@ -212,6 +212,7 @@ WEBHOOK_SECRET=${WEBHOOK_SECRET}
 HYSTERIA_CONFIG=/etc/hysteria/config.yaml
 USERS_DB=/var/lib/hy-webhook/users.json
 LISTEN_PORT=8766
+LISTEN_HOST=0.0.0.0
 HYSTERIA_SVC=hysteria-server
 SECRETEOF
 chmod 600 "$SECRETS_FILE"
@@ -237,6 +238,13 @@ SVCEOF
 
 systemctl daemon-reload
 systemctl enable --now hy-webhook
+
+# Разрешаем Docker контейнерам обращаться к hy-webhook
+if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+    ufw allow in from 172.16.0.0/12 to any port 8766 >/dev/null 2>&1
+    ufw reload >/dev/null 2>&1
+    ok "UFW: разрешён доступ Docker → порт 8766"
+fi
 
 for i in $(seq 1 10); do
     systemctl is-active --quiet hy-webhook && break || sleep 1
