@@ -3450,7 +3450,7 @@ migrate_menu() {
 main_menu() {
     clear
     echo -e "${PURPLE}  ╔══════════════════════════════════════════════════════════╗"
-    printf "${PURPLE}  ║   🛠️  SERVER SETUP — Unified Management   ${CYAN}%-12s${PURPLE}    ║\n" "${SCRIPT_VERSION}"
+    printf "${PURPLE}  ║   🛠️  SERVER SETUP — Unified Management   ${CYAN}%-13s${PURPLE}  ║\n" "${SCRIPT_VERSION}"
     echo -e "  ╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
