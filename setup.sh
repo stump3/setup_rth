@@ -1353,7 +1353,7 @@ show_menu() {
     echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
     echo ""
     echo -e "  ${BOLD}1)${NC}  📋 Логи        ${BOLD}2)${NC}  📊 Статус    ${BOLD}3)${NC}  🔄 Перезапуск"
-    echo -e "  ${BOLD}4)${NC}   ▶️   Старт      ${BOLD}5)${NC}  📦 Обновить  ${BOLD}6)${NC}  🔒 SSL"
+    echo -e "  ${BOLD}4)${NC}   ▶️  Старт      ${BOLD}5)${NC}  📦 Обновить  ${BOLD}6)${NC}  🔒 SSL"
     echo -e "  ${BOLD}7)${NC}  💾 Бэкап       ${BOLD}8)${NC}  🏥 Диагноз   ${BOLD}9)${NC}  🔓 Порт 8443"
     echo -e " ${BOLD}10)${NC}  🔐 Закрыть    ${BOLD}11)${NC}  📦 Перенос"
     echo ""
@@ -1562,7 +1562,7 @@ panel_remove() {
     header "Удалить панель"
     echo -e "  ${BOLD}1)${RESET} 🗑️   Только скрипт (setup.sh)"
     echo -e "  ${BOLD}2)${RESET} 💣  Скрипт + все данные панели (необратимо!)"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -1618,7 +1618,7 @@ panel_warp_menu() {
     echo -e "  ${BOLD}2)${RESET} ➕  Добавить в профиль Xray"
     echo -e "  ${BOLD}3)${RESET} ➖  Удалить из профиля Xray"
     echo -e "  ${BOLD}4)${RESET} 🗑️   Удалить WARP с системы"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -1736,7 +1736,7 @@ panel_template_menu() {
     echo -e "  ${BOLD}2)${RESET} 🌐  Simple web templates"
     echo -e "  ${BOLD}3)${RESET} 🔷  SNI templates"
     echo -e "  ${BOLD}4)${RESET} ⬜  Nothing SNI"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -1818,7 +1818,7 @@ panel_subpage_menu() {
     echo -e "  ${BOLD}1)${RESET} 🎨  Установить Orion шаблон"
     echo -e "  ${BOLD}2)${RESET} 🏷️   Настроить брендинг"
     echo -e "  ${BOLD}3)${RESET} ♻️   Восстановить оригинал"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -1949,7 +1949,7 @@ panel_menu() {
     echo -e "  ${BOLD}7)${RESET}  📦  Миграция на другой сервер"
     echo -e "  ${BOLD}8)${RESET}  🗑️  Удалить панель"
     echo ""
-    echo -e "  ${BOLD}0)${RESET}  ◀️  Назад"
+    echo -e "  ${BOLD}0)${RESET}  ◀️ Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -1972,7 +1972,7 @@ panel_submenu_install() {
     header "Remnawave Panel — Установка"
     echo -e "  ${BOLD}1)${RESET} 🆕  Установить"
     echo -e "  ${BOLD}2)${RESET} 💣  Переустановить (сброс всех данных!)"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -1989,7 +1989,7 @@ panel_submenu_manage() {
     echo -e "  ${BOLD}1)${RESET} 📋  Логи"
     echo -e "  ${BOLD}2)${RESET} 📊  Статус"
     echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
-    echo -e "  ${BOLD}4)${RESET} ▶️   Старт"
+    echo -e "  ${BOLD}4)${RESET} ▶️  Старт"
     echo -e "  ${BOLD}5)${RESET} 📦  Обновить"
     echo -e "  ${BOLD}6)${RESET} 🔒  SSL"
     echo -e "  ${BOLD}7)${RESET} 💾  Бэкап"
@@ -1998,7 +1998,7 @@ panel_submenu_manage() {
     echo -e " ${BOLD}10)${RESET} 🔐  Закрыть порт 8443"
     echo -e " ${BOLD}11)${RESET} 💻  Remnawave CLI"
     echo -e " ${BOLD}12)${RESET} 🔧  Переустановить скрипт (rp)"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     [ -x "$PANEL_MGMT_SCRIPT" ] || { warn "Панель не установлена."; return; }
@@ -2653,7 +2653,7 @@ telemt_main_menu() {
         echo -e "  ${BOLD}3)${RESET} 👥  Пользователи"
         echo -e "  ${BOLD}4)${RESET} 📦  Миграция на другой сервер"
         echo -e "  ${BOLD}5)${RESET} 🔀  Сменить режим (systemd ↔ Docker)"
-        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
@@ -2678,7 +2678,7 @@ telemt_submenu_manage() {
     echo -e "  ${BOLD}1)${RESET} 📊  Статус и логи"
     echo -e "  ${BOLD}2)${RESET} 🔄  Обновить"
     echo -e "  ${BOLD}3)${RESET} ⏹️   Остановить"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -2697,7 +2697,7 @@ telemt_submenu_users() {
     echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
     echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
     echo -e "  ${BOLD}3)${RESET} 👥  Пользователи и ссылки"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
@@ -4015,7 +4015,7 @@ hysteria_menu() {
         echo -e "  ${BOLD}4)${RESET}  🔗  Подписка"
         echo -e "  ${BOLD}5)${RESET}  📦  Миграция на другой сервер"
         echo ""
-        echo -e "  ${BOLD}0)${RESET}  ◀️   Назад"
+        echo -e "  ${BOLD}0)${RESET}  ◀️  Назад"
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
@@ -4037,7 +4037,7 @@ hysteria_submenu_manage() {
         echo -e "  ${BOLD}1)${RESET} 📊  Статус"
         echo -e "  ${BOLD}2)${RESET} 📋  Логи"
         echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
-        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
@@ -4057,7 +4057,7 @@ hysteria_submenu_users() {
         echo -e "  ${BOLD}1)${RESET} ➕  Добавить пользователя"
         echo -e "  ${BOLD}2)${RESET} ➖  Удалить пользователя"
         echo -e "  ${BOLD}3)${RESET} 👥  Пользователи и ссылки"
-        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
@@ -4120,7 +4120,7 @@ hysteria_submenu_sub() {
         echo -e "  ${BOLD}1)${RESET} 📤  Опубликовать подписку"
         echo -e "  ${BOLD}2)${RESET} 🔗  Объединить с подпиской Remnawave (merger)"
         echo -e "  ${BOLD}3)${RESET} 🪝  Интеграция с Remnawave (webhook + sub-page)"
-        echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+        echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
@@ -4145,7 +4145,7 @@ migrate_menu() {
     echo -e "  ${BOLD}3)${RESET} 🚀  Перенести Hysteria2"
     echo -e "  ${BOLD}4)${RESET} 📦  Перенести всё (Panel + MTProxy + Hysteria2)"
     echo -e "  ${BOLD}5)${RESET} 💾  Бэкап / Восстановление (backup-restore)"
-    echo -e "  ${BOLD}0)${RESET} ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET} ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
