@@ -2579,15 +2579,15 @@ telemt_main_menu() {
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
-            1) telemt_menu_install ;;
-            2) telemt_submenu_manage ;;
-            3) telemt_submenu_users ;;
+            1) telemt_menu_install || true ;;
+            2) telemt_submenu_manage || true ;;
+            3) telemt_submenu_users || true ;;
             4) if [ "$TELEMT_MODE" = "systemd" ]; then
                    telemt_menu_migrate
                else
                    telemt_menu_migrate_docker
                fi ;;
-            5) telemt_choose_mode; telemt_check_deps ;;
+            5) telemt_choose_mode; telemt_check_deps || true ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -3928,11 +3928,11 @@ hysteria_menu() {
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
-            1) hysteria_install ;;
-            2) hysteria_submenu_manage ;;
-            3) hysteria_submenu_users ;;
-            4) hysteria_submenu_sub ;;
-            5) hysteria_migrate; read -rp "Enter..." < /dev/tty ;;
+            1) hysteria_install || true ;;
+            2) hysteria_submenu_manage || true ;;
+            3) hysteria_submenu_users || true ;;
+            4) hysteria_submenu_sub || true ;;
+            5) hysteria_migrate || true; read -rp "Enter..." < /dev/tty ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -3950,9 +3950,9 @@ hysteria_submenu_manage() {
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
-            1) hysteria_status; read -rp "Enter..." < /dev/tty ;;
-            2) hysteria_logs;   read -rp "Enter..." < /dev/tty ;;
-            3) hysteria_restart; read -rp "Enter..." < /dev/tty ;;
+            1) hysteria_status || true; read -rp "Enter..." < /dev/tty ;;
+            2) hysteria_logs || true;   read -rp "Enter..." < /dev/tty ;;
+            3) hysteria_restart || true; read -rp "Enter..." < /dev/tty ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -3970,9 +3970,9 @@ hysteria_submenu_users() {
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
-            1) hysteria_add_user; read -rp "Enter..." < /dev/tty ;;
-            2) hysteria_delete_user; read -rp "Enter..." < /dev/tty ;;
-            3) hysteria_show_links; read -rp "Enter..." < /dev/tty ;;
+            1) hysteria_add_user || true; read -rp "Enter..." < /dev/tty ;;
+            2) hysteria_delete_user || true; read -rp "Enter..." < /dev/tty ;;
+            3) hysteria_show_links || true; read -rp "Enter..." < /dev/tty ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -4038,9 +4038,9 @@ hysteria_submenu_sub() {
         echo ""
         local ch; read -rp "  Выбор: " ch < /dev/tty
         case "$ch" in
-            1) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
-            2) hysteria_merge_sub; read -rp "Enter..." < /dev/tty ;;
-            3) hysteria_remnawave_integration ;;
+            1) hysteria_publish_sub || true; read -rp "Enter..." < /dev/tty ;;
+            2) hysteria_merge_sub || true; read -rp "Enter..." < /dev/tty ;;
+            3) hysteria_remnawave_integration || true ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -4070,7 +4070,7 @@ migrate_menu() {
                TELEMT_WORK_DIR="$TELEMT_WORK_DIR_SYSTEMD"
            }
            telemt_menu_migrate ;;
-        3) hysteria_migrate ;;
+        3) hysteria_migrate || true ;;
         4) check_root; migrate_all ;;
         5) panel_backup_restore ;;
         0) return ;;
@@ -4162,10 +4162,10 @@ main_menu() {
         echo ""
         local ch; read -rp "  Выбор: " ch
         case "$ch" in
-            1) panel_menu ;;
-            2) telemt_section ;;
-            3) hysteria_menu ;;
-            4) migrate_menu ;;
+            1) panel_menu || true ;;
+            2) telemt_section || true ;;
+            3) hysteria_menu || true ;;
+            4) migrate_menu || true ;;
             0) exit 0 ;;
             *) warn "Неверный выбор" ;;
         esac
