@@ -2555,12 +2555,13 @@ for u in users:
 }
 
 telemt_main_menu() {
+    # Загружаем версию и порт один раз при входе
+    local mode_label ver telemt_port
+    mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
+    ver=$(get_telemt_version 2>/dev/null || true)
+    telemt_port=""
+    [ -f "$TELEMT_CONFIG_FILE" ] && telemt_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1 || true)
     while true; do
-        local mode_label=""; [ "$TELEMT_MODE" = "systemd" ] && mode_label="systemd" || mode_label="Docker"
-        local ver telemt_port
-        ver=$(get_telemt_version 2>/dev/null || true)
-        telemt_port=""
-        [ -f "$TELEMT_CONFIG_FILE" ] && telemt_port=$(grep -E "^port\s*=" "$TELEMT_CONFIG_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1 || true)
         clear
         echo ""
         echo -e "${BOLD}${WHITE}  📡  MTProxy (telemt)${NC}"
@@ -3903,12 +3904,12 @@ SVCEOF
 
 
 hysteria_menu() {
+    # Загружаем данные один раз при входе в меню, не на каждую итерацию
+    local ver dom port
+    ver=$(get_hysteria_version 2>/dev/null || true)
+    dom=$(hy_get_domain 2>/dev/null || true)
+    port=$(hy_get_port 2>/dev/null || true)
     while true; do
-        # Защита от set -e: || true на всех внешних командах
-        local ver dom port
-        ver=$(get_hysteria_version 2>/dev/null || true)
-        dom=$(hy_get_domain 2>/dev/null || true)
-        port=$(hy_get_port 2>/dev/null || true)
         clear
         echo ""
         echo -e "${BOLD}${WHITE}  🚀  Hysteria2${NC}"
@@ -4107,49 +4108,52 @@ panel_backup_restore() {
 # ГЛАВНОЕ МЕНЮ
 # ═══════════════════════════════════════════════════════════════════
 
+_main_menu_refresh_status() {
+    # Вызывается один раз при входе и после возврата из подменю
+    # Разделено на быструю (systemctl/файлы) и медленную (docker/версии) части
+    local rw_ver hy_ver
+    rw_ver=$(get_remnawave_version 2>/dev/null || true)
+    hy_ver=$(get_hysteria_version 2>/dev/null || true)
+
+    if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
+        _PANEL_STATUS="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
+    elif [ -d /opt/remnawave ]; then
+        _PANEL_STATUS="${YELLOW}◐${NC} остановлена"
+    else
+        _PANEL_STATUS="${GRAY}○ не установлена${NC}"
+    fi
+
+    if systemctl is-active --quiet telemt 2>/dev/null; then
+        _TELEMT_STATUS="${GREEN}●${NC} запущен (systemd)"
+    elif { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^telemt$"; then
+        _TELEMT_STATUS="${GREEN}●${NC} запущен (Docker)"
+    elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
+        _TELEMT_STATUS="${YELLOW}◐${NC} остановлен"
+    else
+        _TELEMT_STATUS="${GRAY}○ не установлен${NC}"
+    fi
+
+    if hy_is_running 2>/dev/null; then
+        _HYSTERIA_STATUS="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
+    elif hy_is_installed 2>/dev/null; then
+        _HYSTERIA_STATUS="${YELLOW}◐${NC} остановлена"
+    else
+        _HYSTERIA_STATUS="${GRAY}○ не установлена${NC}"
+    fi
+}
+
 main_menu() {
+    # Загружаем статус один раз при входе
+    _main_menu_refresh_status
     while true; do
         clear
         echo ""
         echo -e "${BOLD}${PURPLE}  SERVER-MANAGER${NC}${GRAY}  ${SCRIPT_VERSION}${NC}"
         echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
         echo ""
-
-        # Быстрый статус с версиями
-        local panel_status telemt_status hysteria_status
-        local rw_ver hy_ver
-        rw_ver=$(get_remnawave_version 2>/dev/null)
-        hy_ver=$(get_hysteria_version 2>/dev/null)
-
-        if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
-            panel_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
-        elif [ -d /opt/remnawave ]; then
-            panel_status="${YELLOW}◐${NC} остановлена"
-        else
-            panel_status="${GRAY}○ не установлена${NC}"
-        fi
-
-        if systemctl is-active --quiet telemt 2>/dev/null; then
-            telemt_status="${GREEN}●${NC} запущен (systemd)"
-        elif { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^telemt$"; then
-            telemt_status="${GREEN}●${NC} запущен (Docker)"
-        elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
-            telemt_status="${YELLOW}◐${NC} остановлен"
-        else
-            telemt_status="${GRAY}○ не установлен${NC}"
-        fi
-
-        if hy_is_running 2>/dev/null; then
-            hysteria_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
-        elif hy_is_installed 2>/dev/null; then
-            hysteria_status="${YELLOW}◐${NC} остановлена"
-        else
-            hysteria_status="${GRAY}○ не установлена${NC}"
-        fi
-
-        echo -e "  ${GRAY}Remnawave Panel  ${NC}$(echo -e "$panel_status")"
-        echo -e "  ${GRAY}MTProxy (telemt) ${NC}$(echo -e "$telemt_status")"
-        echo -e "  ${GRAY}Hysteria2        ${NC}$(echo -e "$hysteria_status")"
+        echo -e "  ${GRAY}Remnawave Panel  ${NC}$(echo -e "$_PANEL_STATUS")"
+        echo -e "  ${GRAY}MTProxy (telemt) ${NC}$(echo -e "$_TELEMT_STATUS")"
+        echo -e "  ${GRAY}Hysteria2        ${NC}$(echo -e "$_HYSTERIA_STATUS")"
         echo ""
         echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
         echo ""
@@ -4162,10 +4166,10 @@ main_menu() {
         echo ""
         local ch; read -rp "  Выбор: " ch
         case "$ch" in
-            1) panel_menu || true ;;
-            2) telemt_section || true ;;
-            3) hysteria_menu || true ;;
-            4) migrate_menu || true ;;
+            1) panel_menu || true;    _main_menu_refresh_status ;;
+            2) telemt_section || true; _main_menu_refresh_status ;;
+            3) hysteria_menu || true;  _main_menu_refresh_status ;;
+            4) migrate_menu || true;  _main_menu_refresh_status ;;
             0) exit 0 ;;
             *) warn "Неверный выбор" ;;
         esac
