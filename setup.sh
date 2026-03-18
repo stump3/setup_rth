@@ -1150,7 +1150,7 @@ MGMTEOF
 
 
 get_remnawave_version() {
-    docker logs remnawave 2>/dev/null | grep -o "Remnawave Backend v[0-9.]*" | tail -1 | tr -d '\n' | grep -o "v[0-9.]*" || echo ""
+    docker logs remnawave 2>/dev/null | grep -o "Remnawave Backend v[0-9.]*" | tail -1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | tr -d '\n' || echo ""
 }
 
 get_telemt_version() {
@@ -1168,7 +1168,7 @@ panel_menu() {
     clear
     echo ""
     echo -e "${PURPLE}  ╔══════════════════════════════════════════╗${NC}"
-    echo -e "${PURPLE}  ║   🛡️   Remnawave Panel                   ║${NC}"
+    echo -e "${PURPLE}  ║   🛡️    Remnawave Panel                   ║${NC}"
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
     [ -n "$ver" ] && echo -e "  ${GRAY}Версия: ${CYAN}${ver}${NC}"
     [ -n "$panel_domain" ] && echo -e "  ${GRAY}Домен:  ${CYAN}${panel_domain}${NC}"
