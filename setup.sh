@@ -1530,13 +1530,19 @@ panel_reinstall_mgmt() {
 
     # Извлекаем домен и cookie из nginx.conf
     local pd ck cv mode
-    pd=$(grep -m1 "server_name " "$nc" | awk '{print $2}' | tr -d ';')
+
+    # Домен: первый server_name который выглядит как FQDN (не hash_bucket, не _)
+    pd=$(grep "server_name " "$nc" | grep -v "hash_bucket\|server_name _"         | head -1 | awk '{print $2}' | tr -d ';')
+
+    # Cookie ключ и значение: из строки "~*KEY=VALUE" 1
     ck=$(grep "map \$http_cookie" "$nc" -A2 | grep -oP '~\*\K\w+(?==)' | head -1)
     cv=$(grep "map \$http_cookie" "$nc" -A2 | grep -oP '=\K\w+(?= 1)' | head -1)
-    mode=$([ -f /opt/remnawave/docker-compose.yml ] && grep -q "remnanode" /opt/remnawave/docker-compose.yml && echo "1" || echo "2")
+
+    mode=$([ -f /opt/remnawave/docker-compose.yml ]         && grep -q "remnanode" /opt/remnawave/docker-compose.yml         && echo "1" || echo "2")
 
     if [ -z "$pd" ] || [ -z "$ck" ] || [ -z "$cv" ]; then
         warn "Не удалось извлечь параметры из nginx.conf"
+        info "Домен: '${pd:-не найден}'  Ключ: '${ck:-не найден}'  Значение: '${cv:-не найдено}'"
         return 1
     fi
 
