@@ -3300,6 +3300,10 @@ hysteria_menu() {
     printf "${PURPLE}  ║  🚀  Hysteria2  ${CYAN}%-18s${PURPLE}       ║${NC}\n" "${ver}"
     if [ -n "$dom" ]; then
         local info="${dom}${port:+ : $port}"
+        # Обрезаем если слишком длинный
+        if [ ${#info} -gt 38 ]; then
+            info="${info:0:35}..."
+        fi
         printf "${PURPLE}  ║  ${GRAY}%-40s${PURPLE}║${NC}\n" "${info}"
     fi
     echo -e "${PURPLE}  ╚══════════════════════════════════════════╝${NC}"
@@ -3434,8 +3438,7 @@ migrate_menu() {
 main_menu() {
     clear
     echo -e "${PURPLE}  ╔══════════════════════════════════════════════════════════╗"
-    echo -e "  ║   🛠️  SERVER SETUP — Unified Management                  ║"
-    echo -e "  ║                                          ${CYAN}${SCRIPT_VERSION}${PURPLE}  ║"
+    printf "${PURPLE}  ║   🛠️  SERVER SETUP — Unified Management   ${CYAN}%-13s${PURPLE}  ║\n" "${SCRIPT_VERSION}"
     echo -e "  ╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
