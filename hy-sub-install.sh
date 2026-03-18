@@ -464,14 +464,39 @@ cd /opt/hy-subpage
 
 if [ ! -d "frontend/dist" ]; then
     info "Сборка frontend..."
-    docker run --rm -v "$(pwd)/frontend:/app" -w /app node:24-alpine \
-        sh -c "npm ci && npm run build" >/dev/null 2>&1 \
-        && ok "Frontend собран" || warn "Ошибка сборки frontend — продолжаем"
+    if docker run --rm -v "$(pwd)/frontend:/app" -w /app node:24-alpine \
+        sh -c "npm ci && npm run build" 2>&1 | tail -5; then
+        ok "Frontend собран"
+    else
+        warn "Ошибка сборки frontend"
+        warn "Попробуем собрать образ без предварительной сборки frontend..."
+        # Патчим Dockerfile: убираем COPY frontend/dist/ если его нет
+        if [ -f Dockerfile ]; then
+            sed -i '/COPY frontend\/dist/d' Dockerfile
+            info "Dockerfile: строка COPY frontend/dist удалена"
+        fi
+    fi
 fi
 
-docker build --no-cache -t remnawave-sub-hy:local . 2>&1 | tail -5
+# Если Dockerfile не имеет multi-stage build для frontend — собираем отдельно
+# Если имеет FROM node ... AS ... (multi-stage) — Docker справится сам
+if [ -f Dockerfile ] && grep -q "frontend/dist" Dockerfile; then
+    if grep -q "^FROM.*node.*AS\|^FROM.*node.*as" Dockerfile; then
+        info "Dockerfile имеет multi-stage build — frontend соберётся автоматически"
+        # Убеждаемся что предыдущий docker run не навредил
+        true
+    elif [ ! -d "frontend/dist" ]; then
+        sed -i '/COPY frontend\/dist/d' Dockerfile
+        info "Dockerfile: убран COPY frontend/dist (нет multi-stage, папка не существует)"
+    fi
+fi
+
+info "Сборка Docker образа..."
+if ! timeout 600 docker build --no-cache -t remnawave-sub-hy:local . 2>&1 | tail -10; then
+    err "Ошибка сборки Docker-образа"
+fi
 docker inspect remnawave-sub-hy:local &>/dev/null \
-    || err "Docker образ не собрался"
+    || err "Docker образ не найден после сборки"
 ok "Docker образ собран: remnawave-sub-hy:local"
 
 # ── Шаг 5: docker-compose.yml ────────────────────────────────────
