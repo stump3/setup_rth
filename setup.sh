@@ -7,7 +7,7 @@
 # ║  • MTProxy (telemt) — Telegram MTProto прокси (Rust)             ║
 # ║  • Hysteria2        — высокоскоростной VPN (QUIC/UDP)            ║
 # ║                                                                  ║
-# ║  Версия: v2603.172335              build: 2026-03-17 23:35 UTC  ║
+# ║  Версия: определяется автоматически из даты изменения файла     ║
 # ║  Использование: bash setup.sh                                    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 set -euo pipefail
@@ -22,17 +22,38 @@ SCRIPT_VERSION=$(date -r "$0" +'v%y%m.%d%H%M' 2>/dev/null || echo "v0000.000000"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; WHITE='\033[1;37m'
 PURPLE='\033[0;35m'; GRAY='\033[0;90m'; BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'; RESET="$NC"
 
-# ── Пути ────────────────────────────────────────────────────────
-# HYSTERIA_CONFIG объявлен глобально
+# ── Глобальные пути и переменные ────────────────────────────────
 PANEL_MGMT_SCRIPT="/usr/local/bin/remnawave_panel"
+
+# Hysteria2
+HYSTERIA_CONFIG="/etc/hysteria/config.yaml"
+HYSTERIA_DIR="/etc/hysteria"
+HYSTERIA_SVC="hysteria-server"
+
+# Telemt (полные объявления — используются в get_telemt_version и migrate)
+TELEMT_BIN="/usr/local/bin/telemt"
+TELEMT_CONFIG_DIR="/etc/telemt"
+TELEMT_CONFIG_SYSTEMD="/etc/telemt/telemt.toml"
+TELEMT_WORK_DIR_SYSTEMD="/opt/telemt"
+TELEMT_TLSFRONT_DIR="/opt/telemt/tlsfront"
+TELEMT_SERVICE_FILE="/etc/systemd/system/telemt.service"
+TELEMT_WORK_DIR_DOCKER="${HOME}/mtproxy"
+TELEMT_CONFIG_DOCKER="${HOME}/mtproxy/telemt.toml"
+TELEMT_COMPOSE_FILE="${HOME}/mtproxy/docker-compose.yml"
+TELEMT_GITHUB_REPO="telemt/telemt"
+TELEMT_API_URL="http://127.0.0.1:9091/v1/users"
+TELEMT_MODE=""
+TELEMT_CONFIG_FILE=""
+TELEMT_WORK_DIR=""
+TELEMT_CHOSEN_VERSION="latest"
 
 ok()      { echo -e "${GREEN}  ✓ $*${NC}"; }
 info()    { echo -e "${BLUE}  · $*${NC}"; }
 warn()    { echo -e "${YELLOW}  ⚠  $*${NC}"; }
 err()     { echo -e "\n${RED}  ✗  $*${NC}\n"; exit 1; }
-success() { echo -e "${GREEN}  ✓ $*${NC}"; }
 die()     { echo -e "${RED}  ✗  $*${NC}" >&2; exit 1; }
 detail()  { echo -e "${GRAY}    $*${NC}"; }
 
@@ -92,7 +113,8 @@ ask() {
         warn "Поле обязательно"
     done
     printf -v "$var" "%s" "$val"
-    export "$var"
+    # export убран — загрязнял окружение всех дочерних процессов.
+    # Переменная доступна в вызывающем контексте через printf -v.
 }
 
 check_root()    { [ "$EUID" -ne 0 ] && err "Запустите от root: sudo bash $0" || true; }
@@ -210,6 +232,23 @@ remote_install_deps() {
         extra_pkgs=" unzip cron qrencode"
         extra_dirs=" /etc/hysteria"
     fi
+
+    # ── Показываем что будет выполнено и просим подтверждение ─────
+    echo ""
+    warn "На сервере ${_SSH_IP} будут выполнены следующие действия:"
+    echo ""
+    echo "  · apt-get update && apt-get install (curl, docker-deps, certbot...)"
+    echo "  · Установка Docker (если не установлен)"
+    echo "  · Создание swap-файла 2 GB (если нет)"
+    echo "  · Включение BBR (sysctl)"
+    echo "  · Открытие портов 22/tcp и 443/tcp в UFW"
+    [ "$variant" = "full" ] && echo "  · Установка qrencode, unzip, cron"
+    echo ""
+    if ! confirm "Продолжить установку зависимостей на ${_SSH_IP}?" y; then
+        warn "Отменено пользователем"
+        return 1
+    fi
+
     info "Устанавливаем зависимости на новом сервере..."
     RUN bash -s << RDEPS
 export DEBIAN_FRONTEND=noninteractive
@@ -1035,10 +1074,10 @@ panel_install_mgmt_script() {
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; WHITE='\033[1;37m'; PURPLE='\033[0;35m'; NC='\033[0m'
 DIR="/opt/remnawave"
-ok()   { echo -e "${GREEN}✅ $*${NC}"; }
-info() { echo -e "${CYAN}ℹ  $*${NC}"; }
-warn() { echo -e "${YELLOW}⚠  $*${NC}"; }
-spinner() {
+_ok()   { echo -e "${GREEN}✅ $*${NC}"; }
+_info() { echo -e "${CYAN}ℹ  $*${NC}"; }
+_warn() { echo -e "${YELLOW}⚠  $*${NC}"; }
+_spinner() {
     local pid=$1 text="${2:-Подождите...}" spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' delay=0.1
     while kill -0 "$pid" 2>/dev/null; do
         for((i=0;i<${#spinstr};i++)); do
@@ -1070,35 +1109,35 @@ do_logs() {
 do_restart() {
     local s="${1:-all}"; cd "$DIR"
     case $s in
-        nginx)  docker compose restart remnawave-nginx; ok "Nginx перезапущен" ;;
-        panel)  docker compose restart remnawave; ok "Панель перезапущена" ;;
-        sub)    docker compose restart remnawave-subscription-page; ok "Sub перезапущена" ;;
-        node)   docker compose restart remnanode; ok "Нода перезапущена" ;;
+        nginx)  docker compose restart remnawave-nginx; _ok "Nginx перезапущен" ;;
+        panel)  docker compose restart remnawave; _ok "Панель перезапущена" ;;
+        sub)    docker compose restart remnawave-subscription-page; _ok "Sub перезапущена" ;;
+        node)   docker compose restart remnanode; _ok "Нода перезапущена" ;;
         all)
-            docker compose down>/dev/null 2>&1 & spinner $! "Остановка..."
-            docker compose up -d>/dev/null 2>&1 & spinner $! "Запуск..."
-            ok "Всё перезапущено" ;;
+            docker compose down>/dev/null 2>&1 & _spinner $! "Остановка..."
+            docker compose up -d>/dev/null 2>&1 & _spinner $! "Запуск..."
+            _ok "Всё перезапущено" ;;
         *) echo "Укажите: all|nginx|panel|sub|node" ;;
     esac
 }
 do_update() {
     cd "$DIR"
-    docker compose pull>/dev/null 2>&1 & spinner $! "Загрузка..."
-    docker compose down>/dev/null 2>&1 & spinner $! "Остановка..."
-    docker compose up -d>/dev/null 2>&1 & spinner $! "Запуск..."
-    docker image prune -f>/dev/null 2>&1; ok "Обновлено"
+    docker compose pull>/dev/null 2>&1 & _spinner $! "Загрузка..."
+    docker compose down>/dev/null 2>&1 & _spinner $! "Остановка..."
+    docker compose up -d>/dev/null 2>&1 & _spinner $! "Запуск..."
+    docker image prune -f>/dev/null 2>&1; _ok "Обновлено"
 }
 do_ssl() {
     certbot renew --quiet; cd "$DIR"
     docker compose restart remnawave-nginx
-    ok "SSL обновлён"
+    _ok "SSL обновлён"
 }
 do_backup() {
     local ts=$(date +%Y%m%d_%H%M%S) b="$DIR/backups"; mkdir -p "$b"; cd "$DIR"
     docker compose exec -T remnawave-db pg_dump -U postgres postgres>"$b/db_$ts.sql" 2>/dev/null \
-        && ok "БД → $b/db_$ts.sql" || warn "Ошибка бэкапа БД"
+        && _ok "БД → $b/db_$ts.sql" || _warn "Ошибка бэкапа БД"
     tar -czf "$b/configs_$ts.tar.gz" "$DIR/.env" "$DIR/docker-compose.yml" "$DIR/nginx.conf" 2>/dev/null
-    ok "Конфиги → $b/configs_$ts.tar.gz"
+    _ok "Конфиги → $b/configs_$ts.tar.gz"
     find "$b" -mtime +7 -delete 2>/dev/null||true
 }
 do_health() {
@@ -1120,16 +1159,16 @@ do_health() {
 do_open_port() {
     local nc="/opt/remnawave/nginx.conf"
     local pd; pd=$(grep -m1 "server_name " "$nc"|awk '{print $2}'|tr -d ';')
-    ss -tuln|grep -q ":8443" && { warn "Порт 8443 занят"; return 1; }
+    ss -tuln|grep -q ":8443" && { _warn "Порт 8443 занят"; return 1; }
     sed -i "/server_name $pd;/a \\    listen 8443 ssl;" "$nc"
     cd /opt/remnawave && docker compose restart remnawave-nginx>/dev/null 2>&1
     ufw allow 8443/tcp>/dev/null 2>&1; ufw reload>/dev/null 2>&1
     local ck cv
     ck=$(grep "map \$http_cookie" "$nc" -A2|grep -oP '~\*\K\w+(?==)')
     cv=$(grep "map \$http_cookie" "$nc" -A2|grep -oP '=\K\w+(?= 1)')
-    ok "Порт 8443 открыт."
+    _ok "Порт 8443 открыт."
     echo -e "  ${WHITE}https://${pd}:8443/auth/login?${ck}=${cv}${NC}"
-    warn "Закройте после работы: remnawave_panel close_port"
+    _warn "Закройте после работы: remnawave_panel close_port"
 }
 do_close_port() {
     local nc="/opt/remnawave/nginx.conf"
@@ -1137,7 +1176,7 @@ do_close_port() {
     sed -i "/server_name $pd;/,/}/{s/    listen 8443 ssl;//}" "$nc"
     cd /opt/remnawave && docker compose restart remnawave-nginx>/dev/null 2>&1
     ufw delete allow 8443/tcp>/dev/null 2>&1; ufw reload>/dev/null 2>&1
-    ok "Порт 8443 закрыт"
+    _ok "Порт 8443 закрыт"
 }
 do_migrate() {
     header "📦 Перенос Panel на другой сервер"
@@ -1154,12 +1193,12 @@ do_migrate() {
     local rip="$_SSH_IP" rport="$_SSH_PORT" ruser="$_SSH_USER"
 
     # ── Проверка свободного места ──────────────────────────────────
-    info "Проверяем свободное место на новом сервере..."
+    _info "Проверяем свободное место на новом сервере..."
     local remote_free local_used
     remote_free=$(RUN "df -BM /opt --output=avail | tail -1 | tr -d 'M'" 2>/dev/null || echo "0")
     local_used=$(du -sm /opt/remnawave 2>/dev/null | awk '{print $1}' || echo "0")
     if [ "$remote_free" -lt "$((local_used * 2))" ] 2>/dev/null; then
-        warn "Мало места на новом сервере: ${remote_free}MB свободно, нужно ~$((local_used * 2))MB"
+        _warn "Мало места на новом сервере: ${remote_free}MB свободно, нужно ~$((local_used * 2))MB"
         read -rp "  Продолжить всё равно? (y/n): " fc < /dev/tty
         [[ "$fc" =~ ^[yY]$ ]] || return 1
     fi
@@ -1168,7 +1207,7 @@ do_migrate() {
     remote_install_deps panel
 
     # ── Дамп БД ────────────────────────────────────────────────────
-    info "Создаём дамп базы данных..."
+    _info "Создаём дамп базы данных..."
     local dump="/tmp/panel_migrate_$(date +%Y%m%d_%H%M%S).sql.gz"
     cd /opt/remnawave
     docker compose exec -T remnawave-db pg_dumpall -c -U postgres 2>/dev/null | gzip -9 > "$dump"
@@ -1180,48 +1219,48 @@ do_migrate() {
         rm -f "$dump"
         return 1
     fi
-    ok "Дамп БД создан ($(du -sh "$dump" | cut -f1))"
+    _ok "Дамп БД создан ($(du -sh "$dump" | cut -f1))"
 
     # ── Передача файлов ────────────────────────────────────────────
-    info "Передаём файлы панели..."
+    _info "Передаём файлы панели..."
     PUT "$dump" \
         /opt/remnawave/.env \
         /opt/remnawave/docker-compose.yml \
         /opt/remnawave/nginx.conf \
         "${ruser}@${rip}:/opt/remnawave/" 2>/dev/null \
-        && ok "Файлы панели переданы" || { err "Ошибка передачи файлов панели"; return 1; }
+        && _ok "Файлы панели переданы" || { err "Ошибка передачи файлов панели"; return 1; }
 
     # SSL сертификаты
-    info "Передаём SSL сертификаты..."
+    _info "Передаём SSL сертификаты..."
     if [ -d /etc/letsencrypt/live ] && [ -d /etc/letsencrypt/archive ]; then
         PUT /etc/letsencrypt/live \
             /etc/letsencrypt/archive \
             /etc/letsencrypt/renewal \
             "${ruser}@${rip}:/etc/letsencrypt/" 2>/dev/null \
-            && ok "SSL сертификаты переданы" || warn "Ошибка передачи SSL — перевыпустите вручную"
+            && _ok "SSL сертификаты переданы" || _warn "Ошибка передачи SSL — перевыпустите вручную"
     else
-        warn "SSL сертификаты не найдены в /etc/letsencrypt"
+        _warn "SSL сертификаты не найдены в /etc/letsencrypt"
     fi
 
     # Hysteria сертификаты (если есть)
     if [ -d /etc/ssl/certs/hysteria ]; then
-        info "Передаём сертификаты Hysteria2..."
+        _info "Передаём сертификаты Hysteria2..."
         PUT /etc/ssl/certs/hysteria \
             "${ruser}@${rip}:/etc/ssl/certs/" 2>/dev/null \
-            && ok "Сертификаты Hysteria2 переданы" || warn "Ошибка передачи сертификатов Hysteria2"
+            && _ok "Сертификаты Hysteria2 переданы" || _warn "Ошибка передачи сертификатов Hysteria2"
     fi
 
     # Selfsteal сайт
     if [ -d /var/www/html ] && [ "$(ls -A /var/www/html 2>/dev/null)" ]; then
-        info "Передаём selfsteal сайт..."
+        _info "Передаём selfsteal сайт..."
         PUT /var/www/html/. "${ruser}@${rip}:/var/www/html/" 2>/dev/null \
-            && ok "Selfsteal сайт передан" || warn "Ошибка передачи сайта"
+            && _ok "Selfsteal сайт передан" || _warn "Ошибка передачи сайта"
     fi
 
-    ok "Все файлы переданы"
+    _ok "Все файлы переданы"
 
     # ── Запуск на новом сервере ────────────────────────────────────
-    info "Запускаем стек на новом сервере..."
+    _info "Запускаем стек на новом сервере..."
     local dumpb; dumpb=$(basename "$dump")
     RUN bash -s << RSTART
 set -e
@@ -1249,19 +1288,19 @@ zcat /opt/remnawave/$dumpb | docker compose exec -T remnawave-db psql -U postgre
 docker compose up -d >/dev/null 2>&1
 echo "Стек запущен"
 RSTART
-    ok "Стек запущен на новом сервере"
+    _ok "Стек запущен на новом сервере"
 
     # ── Копируем скрипты управления ────────────────────────────────
     PUT /usr/local/bin/remnawave_panel \
         "${ruser}@${rip}:/usr/local/bin/remnawave_panel" 2>/dev/null && \
     RUN "chmod +x /usr/local/bin/remnawave_panel" 2>/dev/null && \
     RUN "grep -q 'alias rp=' /etc/bash.bashrc || echo \"alias rp='remnawave_panel'\" >> /etc/bash.bashrc" 2>/dev/null
-    ok "Скрипт управления установлен"
+    _ok "Скрипт управления установлен"
 
     # ── Копируем setup.sh ──────────────────────────────────────────
     PUT "$0" "${ruser}@${rip}:/root/setup.sh" 2>/dev/null && \
     RUN "chmod +x /root/setup.sh" 2>/dev/null
-    ok "setup.sh скопирован на новый сервер"
+    _ok "setup.sh скопирован на новый сервер"
 
     # ── Очистка ────────────────────────────────────────────────────
     rm -f "$dump"
@@ -1269,7 +1308,7 @@ RSTART
 
     # ── Итог ───────────────────────────────────────────────────────
     echo ""
-    ok "Перенос панели завершён!"
+    _ok "Перенос панели завершён!"
     echo ""
     echo -e "  ${WHITE}Следующие шаги:${NC}"
     echo -e "  ${CYAN}1.${NC} Обновите DNS-записи на новый IP: ${CYAN}${rip}${NC}"
@@ -1282,9 +1321,9 @@ RSTART
     read -rp "  Остановить панель на ЭТОМ сервере? (y/n): " stop_old < /dev/tty
     if [[ "$stop_old" =~ ^[yY]$ ]]; then
         cd /opt/remnawave && docker compose stop >/dev/null 2>&1
-        ok "Панель на старом сервере остановлена"
+        _ok "Панель на старом сервере остановлена"
     else
-        info "Панель на старом сервере продолжает работать"
+        _info "Панель на старом сервере продолжает работать"
     fi
 }
 show_menu() {
@@ -1317,8 +1356,8 @@ case "$1" in
     status)      do_status ;;
     logs)        do_logs "${2:-panel}" ;;
     restart)     do_restart "${2:-all}" ;;
-    start)       cd /opt/remnawave && docker compose up -d; ok "Запущено" ;;
-    stop)        cd /opt/remnawave && docker compose down; ok "Остановлено" ;;
+    start)       cd /opt/remnawave && docker compose up -d; _ok "Запущено" ;;
+    stop)        cd /opt/remnawave && docker compose down; _ok "Остановлено" ;;
     update)      do_update ;;
     ssl)         do_ssl ;;
     backup)      do_backup ;;
@@ -1338,7 +1377,7 @@ case "$1" in
                 1) read -p "  Логи (panel/nginx/sub/node) [panel]: " s</dev/tty; do_logs "${s:-panel}" ;;
                 2) do_status; read -p "Enter..."</dev/tty ;;
                 3) read -p "  Что перезапустить? [all]: " s</dev/tty; do_restart "${s:-all}"; read -p "Enter..."</dev/tty ;;
-                4) cd /opt/remnawave && docker compose up -d; ok "Запущено"; read -p "Enter..."</dev/tty ;;
+                4) cd /opt/remnawave && docker compose up -d; _ok "Запущено"; read -p "Enter..."</dev/tty ;;
                 5) do_update; read -p "Enter..."</dev/tty ;;
                 6) do_ssl; read -p "Enter..."</dev/tty ;;
                 7) do_backup; read -p "Enter..."</dev/tty ;;
@@ -1904,20 +1943,7 @@ panel_submenu_manage() {
 # ████████████████████  TELEMT SECTION  ████████████████████████████
 # ═══════════════════════════════════════════════════════════════════
 
-TELEMT_GITHUB_REPO="telemt/telemt"
-TELEMT_API_URL="http://127.0.0.1:9091/v1/users"
-TELEMT_BIN="/usr/local/bin/telemt"
-TELEMT_CONFIG_DIR="/etc/telemt"
-TELEMT_CONFIG_SYSTEMD="$TELEMT_CONFIG_DIR/telemt.toml"
-TELEMT_WORK_DIR_SYSTEMD="/opt/telemt"
-TELEMT_TLSFRONT_DIR="/opt/telemt/tlsfront"
-TELEMT_SERVICE_FILE="/etc/systemd/system/telemt.service"
-TELEMT_WORK_DIR_DOCKER="${HOME}/mtproxy"
-TELEMT_CONFIG_DOCKER="${HOME}/mtproxy/telemt.toml"
-TELEMT_COMPOSE_FILE="${HOME}/mtproxy/docker-compose.yml"
-TELEMT_MODE=""        # "systemd" или "docker"
-TELEMT_CONFIG_FILE="" # устанавливается после выбора
-TELEMT_WORK_DIR=""
+# Переменные Telemt объявлены глобально в начале скрипта
 
 telemt_choose_mode() {
     header "telemt MTProxy — метод установки"
@@ -1935,7 +1961,7 @@ telemt_choose_mode() {
         0) return 1 ;;
         *) warn "Неверный выбор"; telemt_choose_mode ;;
     esac
-    success "Режим: $TELEMT_MODE"
+    ok "Режим: $TELEMT_MODE"
 }
 
 telemt_check_deps() {
@@ -1994,7 +2020,7 @@ telemt_download_binary() {
     info "Скачиваю telemt $ver..."
     local tmp; tmp=$(mktemp -d)
     curl -fsSL "$url" | tar -xz -C "$tmp" && install -m 0755 "$tmp/telemt" "$TELEMT_BIN" && rm -rf "$tmp" \
-        && success "Установлен: $TELEMT_BIN" || { rm -rf "$tmp"; die "Не удалось скачать бинарник."; }
+        && ok "Установлен: $TELEMT_BIN" || { rm -rf "$tmp"; die "Не удалось скачать бинарник."; }
 }
 
 telemt_write_config() {
@@ -2153,11 +2179,11 @@ telemt_ask_users() {
         [ -z "$uname" ] && { warn "Нужен хотя бы один пользователь!"; continue; }
         local secret; read -rp "  Секрет (32 hex) [Enter = сгенерировать]: " secret
         if [ -z "$secret" ]; then
-            secret=$(gen_secret); success "Секрет: $secret"
+            secret=$(gen_secret); ok "Секрет: $secret"
         elif ! echo "$secret" | grep -qE '^[0-9a-fA-F]{32}$'; then
             warn "Секрет должен быть 32 hex-символа"; continue
         fi
-        TELEMT_USER_PAIRS+=("$uname $secret"); success "Пользователь '$uname' добавлен"
+        TELEMT_USER_PAIRS+=("$uname $secret"); ok "Пользователь '$uname' добавлен"
         echo ""
     done
 }
@@ -2179,15 +2205,15 @@ telemt_menu_install() {
         chown -R telemt:telemt "$TELEMT_CONFIG_DIR" "$TELEMT_WORK_DIR"
         telemt_write_service
         systemctl daemon-reload; systemctl enable telemt; systemctl start telemt
-        success "Сервис запущен"
+        ok "Сервис запущен"
     else
         telemt_write_config "$port" "$domain" "${TELEMT_USER_PAIRS[@]}"
         telemt_write_compose "$port"
         cd "$TELEMT_WORK_DIR_DOCKER"
         docker compose pull -q; docker compose up -d
-        success "Контейнер запущен"
+        ok "Контейнер запущен"
     fi
-    command -v ufw &>/dev/null && ufw allow "${port}/tcp" &>/dev/null && success "ufw: порт $port открыт"
+    command -v ufw &>/dev/null && ufw allow "${port}/tcp" &>/dev/null && ok "ufw: порт $port открыт"
     sleep 3; header "Ссылки"
     echo -e "${BOLD}IP:${RESET} $(get_public_ip)"
     telemt_fetch_links
@@ -2200,7 +2226,7 @@ telemt_menu_add_user() {
     local uname; read -rp "  Имя: " uname; [ -z "$uname" ] && die "Имя не может быть пустым"
     grep -q "^${uname} = " "$TELEMT_CONFIG_FILE" && die "Пользователь '$uname' уже существует"
     local secret; read -rp "  Секрет [Enter = сгенерировать]: " secret
-    [ -z "$secret" ] && { secret=$(gen_secret); success "Секрет: $secret"; } \
+    [ -z "$secret" ] && { secret=$(gen_secret); ok "Секрет: $secret"; } \
         || echo "$secret" | grep -qE '^[0-9a-fA-F]{32}$' || die "Секрет должен быть 32 hex"
     echo ""; echo -e "${BOLD}Ограничения (Enter = пропустить):${RESET}"
     local mc mi qg ed
@@ -2214,8 +2240,8 @@ telemt_menu_add_user() {
     [ -n "$mi" ] && { block+="\nmax_unique_ips = $mi"; has=1; }
     [ -n "$qg" ] && { local qb; qb=$(python3 -c "print(int($qg*1024**3))"); block+="\ndata_quota_bytes = $qb"; has=1; }
     [ -n "$ed" ] && { local exp; exp=$(python3 -c "from datetime import datetime,timezone,timedelta; dt=datetime.now(timezone.utc)+timedelta(days=int($ed)); print(dt.strftime('%Y-%m-%dT%H:%M:%SZ'))"); block+="\nexpiration_rfc3339 = \"$exp\""; has=1; }
-    [ "$has" -eq 1 ] && { printf "\n[access.user_limits.$uname]$block\n" >> "$TELEMT_CONFIG_FILE"; success "Ограничения применены"; }
-    success "Пользователь '$uname' добавлен"
+    [ "$has" -eq 1 ] && { printf "\n[access.user_limits.$uname]$block\n" >> "$TELEMT_CONFIG_FILE"; ok "Ограничения применены"; }
+    ok "Пользователь '$uname' добавлен"
     telemt_is_running && {
         if [ "$TELEMT_MODE" = "systemd" ]; then
             info "Hot reload..."
@@ -2266,7 +2292,7 @@ telemt_menu_delete_user() {
     # Удаляем секцию [access.user_limits.USERNAME] если есть
     sed -i "/^\[access\.user_limits\.${selected}\]/,/^\[/{/^\[access\.user_limits\.${selected}\]/d; /^\[/!{/^$/d; d}}" "$TELEMT_CONFIG_FILE"
 
-    success "Пользователь '${selected}' удалён"
+    ok "Пользователь '${selected}' удалён"
 
     # Hot reload
     if telemt_is_running; then
@@ -2304,14 +2330,14 @@ telemt_menu_update() {
         cd "$TELEMT_WORK_DIR_DOCKER" || die "Директория не найдена"
         docker compose pull; docker compose up -d
     fi
-    success "Обновлено"
+    ok "Обновлено"
 }
 
 telemt_menu_stop() {
     header "Остановка"
     if [ "$TELEMT_MODE" = "systemd" ]; then need_root; systemctl stop telemt
     else cd "$TELEMT_WORK_DIR_DOCKER" || die ""; docker compose down; fi
-    success "Остановлено"
+    ok "Остановлено"
 }
 
 telemt_menu_migrate() {
@@ -2341,7 +2367,7 @@ telemt_menu_migrate() {
     local users_block
     users_block=$(awk '/^\[access\.users\]/{found=1;next} found&&/^\[/{exit} found&&/=/{print}' "$TELEMT_CONFIG_FILE")
     [ -z "$users_block" ] && die "Не найдено пользователей в конфиге"
-    success "Пользователей: $(echo "$users_block" | grep -c "=")"
+    ok "Пользователей: $(echo "$users_block" | grep -c "=")"
 
     local remote_config
     remote_config="$(cat <<RCONF
@@ -2382,10 +2408,10 @@ RCONF
     limits_block=$(awk '/^\[access\.user_limits\./{found=1} found{print}' "$TELEMT_CONFIG_FILE" || true)
 
     info "Копирую скрипт на новый сервер..."
-    RSCP "$(realpath "$0")" &>/dev/null; success "Скрипт скопирован в /tmp/"
+    RSCP "$(realpath "$0")" &>/dev/null; ok "Скрипт скопирован в /tmp/"
     info "Копирую конфиг..."
     echo "$remote_config" | RRUN "mkdir -p /etc/telemt && cat > /etc/telemt/telemt.toml"
-    [ -n "$limits_block" ] && { echo "$limits_block" | RRUN "echo '' >> /etc/telemt/telemt.toml && cat >> /etc/telemt/telemt.toml"; success "Лимиты перенесены"; }
+    [ -n "$limits_block" ] && { echo "$limits_block" | RRUN "echo '' >> /etc/telemt/telemt.toml && cat >> /etc/telemt/telemt.toml"; ok "Лимиты перенесены"; }
 
     header "Установка на $nh"
     RRUN bash << REMOTE_INSTALL
@@ -2425,7 +2451,7 @@ echo "[OK] Сервис запущен"
 command -v ufw &>/dev/null && ufw allow ${new_pp}/tcp &>/dev/null && echo "[OK] Порт $new_pp открыт"
 REMOTE_INSTALL
 
-    success "Установка завершена!"
+    ok "Установка завершена!"
     header "Новые ссылки"; echo -e "${BOLD}Новый IP:${RESET} $nh"; info "Жду запуска..."; sleep 5
     local nl; nl=$(RRUN "curl -s --max-time 10 http://127.0.0.1:9091/v1/users 2>/dev/null"||true)
     if echo "$nl" | grep -q "tg://proxy"; then
@@ -2441,7 +2467,7 @@ for u in users:
     if tls: print(f'{BOLD}│  Ссылка:{RESET}  {tls[0]}')
     print(f'{BOLD}└{chr(9472)*44}{RESET}'); print()
 " 2>/dev/null
-        success "Миграция завершена! Разошли новые ссылки."
+        ok "Миграция завершена! Разошли новые ссылки."
         warn "Старый сервер ещё работает. Когда будешь готов: systemctl stop telemt"
     else
         warn "Сервис запущен, но API пока не ответил. Проверь: curl -s http://127.0.0.1:9091/v1/users"
@@ -2478,22 +2504,22 @@ telemt_menu_migrate_docker() {
     config_to_send=$(sed "s/^port = .*/port = $new_pp/; s/tls_domain.*=.*/tls_domain    = \"$new_dom\"/" "$TELEMT_CONFIG_FILE")
 
     info "Проверяю Docker на новом сервере..."
-    RRUN "command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 && systemctl enable docker; }"         && success "Docker готов" || die "Не удалось установить Docker"
+    RRUN "command -v docker &>/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 && systemctl enable docker; }"         && ok "Docker готов" || die "Не удалось установить Docker"
 
     info "Копирую конфиг и compose файл..."
     RRUN "mkdir -p $(dirname "$TELEMT_CONFIG_FILE") $(dirname "$TELEMT_COMPOSE_FILE")"
     echo "$config_to_send" | RRUN "cat > $TELEMT_CONFIG_FILE"
     RSCP "$TELEMT_COMPOSE_FILE" "$TELEMT_COMPOSE_FILE"
-    success "Файлы скопированы"
+    ok "Файлы скопированы"
 
     info "Запускаю контейнер на новом сервере..."
-    RRUN "cd $(dirname "$TELEMT_COMPOSE_FILE") && docker compose pull -q && docker compose up -d"         && success "Контейнер запущен" || die "Ошибка запуска контейнера"
+    RRUN "cd $(dirname "$TELEMT_COMPOSE_FILE") && docker compose pull -q && docker compose up -d"         && ok "Контейнер запущен" || die "Ошибка запуска контейнера"
 
     # Открываем порт
     RRUN "command -v ufw &>/dev/null && ufw allow ${new_pp}/tcp &>/dev/null || true"
 
     # Проверяем ссылки
-    success "Миграция завершена!"
+    ok "Миграция завершена!"
     header "Новые ссылки"
     echo -e "${BOLD}Новый IP:${RESET} $nh"
     info "Жду запуска..."
@@ -2771,28 +2797,9 @@ RTELEMT
         for f in /root/hysteria-*.txt; do
             [ -f "$f" ] && PUT "$f" "${ruser}@${rip}:/root/" 2>/dev/null || true
         done
-        RUN bash << RHYSTERIA
-set -e
-ARCH=\$(uname -m)
-case "\$ARCH" in x86_64) ARCH="amd64";; aarch64|arm64) ARCH="arm64";; *) echo "Архитектура не поддерживается"; exit 1;; esac
-VER=\$(curl -fsSL https://api.github.com/repos/apernet/hysteria/releases/latest | grep tag_name | cut -d'"' -f4)
-curl -fsSL "https://github.com/apernet/hysteria/releases/download/\${VER}/hysteria-linux-\${ARCH}" -o /usr/local/bin/hysteria
-chmod +x /usr/local/bin/hysteria
-cat > /etc/systemd/system/hysteria-server.service << 'HSVC'
-[Unit]
-Description=Hysteria Server Service (config.yaml)
-After=network.target
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/hysteria server --config /etc/hysteria/config.yaml
-WorkingDirectory=/etc/hysteria
-Restart=always
-RestartSec=5
-[Install]
-WantedBy=multi-user.target
-HSVC
-systemctl daemon-reload; systemctl enable hysteria-server; systemctl restart hysteria-server
-RHYSTERIA
+        # Используем официальный установщик — тот же что в hysteria_migrate/hysteria_install
+        RUN "bash <(curl -fsSL https://get.hy2.sh/) && systemctl enable hysteria-server && systemctl restart hysteria-server" \
+            || { warn "Ошибка установки Hysteria2 на новом сервере"; }
         ok "Hysteria2 перенесена"
     else
         warn "Hysteria2 не найдена, пропускаю"
@@ -2828,9 +2835,7 @@ RHYSTERIA
 # ███████████████████  HYSTERIA2 SECTION  ██████████████████████████
 # ═══════════════════════════════════════════════════════════════════
 
-HYSTERIA_CONFIG="/etc/hysteria/config.yaml"
-HYSTERIA_DIR="/etc/hysteria"
-HYSTERIA_SVC="hysteria-server"
+
 
 hy_is_installed() { command -v hysteria &>/dev/null; }
 
@@ -2877,6 +2882,17 @@ hy_resolve_a() {
     else
         getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.' || true
     fi
+}
+
+# ── Вспомогательные функции для чтения конфига ───────────────────
+hy_get_domain() {
+    [ -f "$HYSTERIA_CONFIG" ] || { echo ""; return 1; }
+    hy_get_domain
+}
+
+hy_get_port() {
+    [ -f "$HYSTERIA_CONFIG" ] || { echo ""; return 1; }
+    hy_get_port
 }
 
 # ── Установка ─────────────────────────────────────────────────────
@@ -3357,7 +3373,7 @@ hysteria_delete_user() {
     # Удаляем строку из userpass
     sed -i "/^    ${selected}:/d" "$HYSTERIA_CONFIG"
 
-    success "Пользователь '${selected}' удалён"
+    ok "Пользователь '${selected}' удалён"
 
     # Перезапускаем сервис
     systemctl reload "$HYSTERIA_SVC" 2>/dev/null || systemctl restart "$HYSTERIA_SVC"
@@ -3418,8 +3434,8 @@ hysteria_add_user() {
 
     # Генерируем URI для нового пользователя
     local dom port conn_name uri
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
-    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+    dom=$(hy_get_domain)
+    port=$(hy_get_port)
 
     # Собираем существующие названия из URI-файла
     local users_file="/root/hysteria-${dom}-users.txt"
@@ -3484,8 +3500,8 @@ hysteria_migrate() {
 
     # Получаем домен из конфига
     local domain hy_port
-    domain=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
-    hy_port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+    domain=$(hy_get_domain)
+    hy_port=$(hy_get_port)
 
     # 1. Установка Hysteria2 на новом сервере
     info "Установка Hysteria2 на новом сервере..."
@@ -3524,8 +3540,10 @@ REMOTE
     ok "Сервис запущен на новом сервере"
 
     # 5. Копирование URI-файлов
-    PUT /root/hysteria-${domain}*.txt  "${ruser}@${rip}:/root/" 2>/dev/null || true
-    PUT /root/hysteria-${domain}*.yaml "${ruser}@${rip}:/root/" 2>/dev/null || true
+    # Копируем URI-файлы с явной проверкой — glob в scp без файлов передаёт литеральную строку с *
+    for _f in /root/hysteria-${domain}*.txt /root/hysteria-${domain}*.yaml; do
+        [ -f "$_f" ] && PUT "$_f" "${ruser}@${rip}:/root/" 2>/dev/null || true
+    done
 
     # 6. Копирование этого скрипта
     local script_path; script_path=$(realpath "$0" 2>/dev/null || echo "/root/setup.sh")
@@ -3621,8 +3639,8 @@ hysteria_show_links() {
     [ -f "$HYSTERIA_CONFIG" ] || { warn "Конфиг не найден"; return 1; }
 
     local dom port
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
-    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
+    dom=$(hy_get_domain)
+    port=$(hy_get_port)
 
     local -a users=()
     while IFS= read -r line; do
@@ -3652,7 +3670,17 @@ hysteria_show_links() {
 
     local selected="${users[$((ch-1))]}"
     local pass
-    pass=$(grep -E "^    ${selected}:" "$HYSTERIA_CONFIG" | sed 's/.*: "//' | tr -d '"')
+    # Python-парсинг надёжнее sed — не ломается на спецсимволах (: # " в пароле)
+    if command -v python3 &>/dev/null; then
+        pass=$(python3 -c "
+import sys, re
+cfg = open('$HYSTERIA_CONFIG').read()
+m = re.search(r'^ {4}' + re.escape('${selected}') + r':\s*[\"\x27]?([^\"\x27\n]+)[\"\x27]?', cfg, re.M)
+print(m.group(1).strip() if m else '')
+" 2>/dev/null)
+    else
+        pass=$(grep -E "^    ${selected}:" "$HYSTERIA_CONFIG" | sed 's/.*: //' | tr -d '"' | tr -d "'")
+    fi
 
     # Ищем сохранённое название из URI-файлов
     local conn_name=""
@@ -3688,291 +3716,7 @@ hysteria_show_links() {
 }
 
 # ── Подменю Hysteria2 ─────────────────────────────────────────────
-# ── Merger-подписка (Remnawave + Hysteria2) ──────────────────────
-hysteria_setup_merger() {
-    header "Hysteria2 — Объединённая подписка"
-    [ -f "$HYSTERIA_CONFIG" ] || { warn "Hysteria2 не установлена"; return 1; }
-    [ -d /opt/remnawave ] || { warn "Remnawave Panel не установлена"; return 1; }
-
-    local dom port
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
-    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
-
-    # Собираем URI
-    local -a uris=()
-    for f in "/root/hysteria-${dom}.txt" "/root/hysteria-${dom}-users.txt"; do
-        [ -f "$f" ] || continue
-        while IFS= read -r line; do
-            [[ "$line" =~ ^hy2:// ]] && uris+=("$line")
-        done < "$f"
-    done
-
-    if [ ${#uris[@]} -eq 0 ]; then
-        warn "URI не найдены. Сначала установите Hysteria2."
-        return 1
-    fi
-
-    # Читаем SUB_PUBLIC_DOMAIN из .env панели
-    local sub_domain=""
-    [ -f /opt/remnawave/.env ] && sub_domain=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"' | cut -d'/' -f1)
-
-    if [ -z "$sub_domain" ]; then
-        read -rp "  Домен подписок Remnawave (например sub.example.com): " sub_domain < /dev/tty
-    else
-        info "Домен подписок: $sub_domain"
-    fi
-
-    # Путь для merger скрипта
-    local merger_dir="/var/www/html/merger"
-    local merger_script="/var/www/html/merger/merge.py"
-    local merger_port=8765
-
-    info "Установка зависимостей..."
-    apt-get install -y -q python3 python3-pip >/dev/null 2>&1
-    pip3 install aiohttp --break-system-packages -q 2>/dev/null || true
-
-    # Сохраняем URI в файл
-    mkdir -p "$merger_dir"
-    printf '%s
-' "${uris[@]}" > "${merger_dir}/hysteria_uris.txt"
-    ok "URI сохранены: ${merger_dir}/hysteria_uris.txt"
-
-    # Создаём merger скрипт
-    cat > "$merger_script" << 'PYEOF'
-#!/usr/bin/env python3
-import asyncio
-import base64
-import os
-from aiohttp import web, ClientSession, ClientTimeout
-
-UPSTREAM = os.environ.get("SUB_UPSTREAM", "https://sub.example.com")
-HY_FILE  = os.environ.get("HY_FILE", "/var/www/html/merger/hysteria_uris.txt")
-PORT     = int(os.environ.get("MERGER_PORT", "8765"))
-
-def load_hy_uris():
-    try:
-        with open(HY_FILE) as f:
-            return [l.strip() for l in f if l.strip().startswith("hy2://")]
-    except Exception:
-        return []
-
-async def handle(request):
-    token = request.match_info.get("token", "")
-    url   = f"{UPSTREAM}/{token}"
-    try:
-        timeout = ClientTimeout(total=10)
-        async with ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers={"User-Agent": request.headers.get("User-Agent","")}) as resp:
-                raw = await resp.read()
-    except Exception as e:
-        return web.Response(status=502, text=f"Upstream error: {e}")
-
-    # Декодируем base64
-    try:
-        decoded = base64.b64decode(raw).decode("utf-8")
-        lines = [l for l in decoded.splitlines() if l.strip()]
-    except Exception:
-        lines = [l for l in raw.decode("utf-8","ignore").splitlines() if l.strip()]
-
-    # Добавляем Hysteria2
-    hy_uris = load_hy_uris()
-    lines.extend(hy_uris)
-
-    # Кодируем обратно в base64
-    merged = base64.b64encode("
-".join(lines).encode()).decode()
-    return web.Response(
-        text=merged,
-        content_type="text/plain",
-        headers={
-            "Cache-Control": "no-cache",
-            "Subscription-Userinfo": resp.headers.get("Subscription-Userinfo",""),
-        }
-    )
-
-app = web.Application()
-app.router.add_get("/{token}", handle)
-app.router.add_get("/{token}/", handle)
-
-if __name__ == "__main__":
-    web.run_app(app, host="127.0.0.1", port=PORT)
-PYEOF
-
-    chmod +x "$merger_script"
-
-    # Создаём systemd сервис
-    cat > /etc/systemd/system/hy-merger.service << SVCEOF
-[Unit]
-Description=Hysteria2 Subscription Merger
-After=network.target
-
-[Service]
-Type=simple
-Environment=SUB_UPSTREAM=https://${sub_domain}
-Environment=HY_FILE=${merger_dir}/hysteria_uris.txt
-Environment=MERGER_PORT=${merger_port}
-ExecStart=/usr/bin/python3 ${merger_script}
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-
-    systemctl daemon-reload
-    systemctl enable --now hy-merger
-    sleep 2
-
-    if systemctl is-active --quiet hy-merger; then
-        ok "Merger запущен на порту $merger_port"
-    else
-        warn "Merger не запустился. Проверьте: journalctl -u hy-merger -n 20"
-        return 1
-    fi
-
-    # Добавляем location /merge/ в блок sub домена nginx
-    if [ -f /opt/remnawave/nginx.conf ]; then
-        if grep -q "hy-merger" /opt/remnawave/nginx.conf; then
-            warn "Location для merger уже существует в nginx.conf"
-        else
-            # Вставляем location /merge/ перед location @redirect в блоке sub домена
-            python3 << PYEOF
-import re
-with open('/opt/remnawave/nginx.conf') as f:
-    cfg = f.read()
-
-location_block = """    location /merge/ {
-        proxy_pass http://127.0.0.1:${merger_port}/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-"""
-
-# Вставляем перед location @redirect в блоке sub домена
-cfg = cfg.replace('    location @redirect {', location_block + '    location @redirect {', 1)
-
-with open('/opt/remnawave/nginx.conf', 'w') as f:
-    f.write(cfg)
-print("OK")
-PYEOF
-            cd /opt/remnawave && docker compose restart remnawave-nginx >/dev/null 2>&1
-            ok "Nginx обновлён — location /merge/ добавлен в sub домен"
-        fi
-    else
-        warn "nginx.conf не найден. Добавьте location вручную в блок sub домена."
-    fi
-
-    echo ""
-    ok "Готово! Объединённая подписка доступна по адресу:"
-    echo ""
-    echo -e "  ${CYAN}https://${sub_domain}/merge/ТОКЕН_ПОЛЬЗОВАТЕЛЯ${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Замените ТОКЕН_ПОЛЬЗОВАТЕЛЯ на токен из панели Remnawave.${NC}"
-    echo -e "  ${YELLOW}Например: https://${sub_domain}/merge/uR5UffbwYXMA${NC}"
-    echo ""
-    echo -e "  Для обновления URI Hysteria2: пункт ${BOLD}8) Опубликовать подписку${RESET}"
-}
-
-# ── Публикация подписки через nginx ──────────────────────────────
-hysteria_publish_sub() {
-    header "Hysteria2 — Публикация подписки"
-    [ -f "$HYSTERIA_CONFIG" ] || { warn "Hysteria2 не установлена"; return 1; }
-
-    local dom port
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
-    port=$(grep '^listen:' "$HYSTERIA_CONFIG" | grep -oE '[0-9]+$')
-
-    # Собираем все URI из файлов
-    local users_file="/root/hysteria-${dom}-users.txt"
-    local main_file="/root/hysteria-${dom}.txt"
-    local -a uris=()
-    for f in "$main_file" "$users_file"; do
-        [ -f "$f" ] || continue
-        while IFS= read -r line; do
-            [[ "$line" =~ ^hy2:// ]] && uris+=("$line")
-        done < "$f"
-    done
-
-    if [ ${#uris[@]} -eq 0 ]; then
-        warn "URI не найдены. Сначала установите Hysteria2 и добавьте пользователей."
-        return 1
-    fi
-
-    info "Найдено URI: ${#uris[@]}"
-    echo ""
-
-    # Выбор метода публикации
-    echo -e "  ${WHITE}Метод публикации:${NC}"
-    echo ""
-    echo -e "  ${BOLD}1)${RESET} Через nginx панели (Remnawave)"
-    echo -e "     ${GRAY}Файл → /var/www/html/hy/sub.txt${NC}"
-    echo -e "     ${GRAY}URL  → https://SELFSTEAL_DOMAIN/hy/sub.txt${NC}"
-    echo ""
-    echo -e "  ${BOLD}2)${RESET} Только локальный файл"
-    echo -e "     ${GRAY}Файл → /root/hysteria-${dom}-sub.txt${NC}"
-    echo ""
-    echo -e "  ${BOLD}3)${RESET} Оба варианта"
-    echo -e "  ${BOLD}0)${RESET} Назад"
-    echo ""
-    local ch; read -rp "Выбор [3]: " ch < /dev/tty
-    ch="${ch:-3}"
-
-    # Спрашиваем имя файла
-    local sub_name
-    read -rp "  Имя файла подписки [sub]: " sub_name < /dev/tty
-    sub_name="${sub_name:-sub}"
-
-    # Генерируем base64 контент (стандарт для подписок)
-    local sub_content
-    sub_content=$(printf '%s
-' "${uris[@]}" | base64 -w 0)
-
-    case "$ch" in
-        1|3)
-            local pub_dir="/var/www/html/hy"
-            mkdir -p "$pub_dir"
-            printf '%s
-' "${uris[@]}" | base64 -w 0 > "${pub_dir}/${sub_name}.txt"
-            # Также сохраняем plain-text версию
-            printf '%s
-' "${uris[@]}" > "${pub_dir}/${sub_name}-plain.txt"
-            ok "Файл создан: ${pub_dir}/${sub_name}.txt"
-            echo ""
-            # Определяем selfsteal домен из nginx конфига
-            local selfsteal_dom=""
-            if [ -f /opt/remnawave/nginx.conf ]; then
-                selfsteal_dom=$(grep -A2 "root /var/www/html" /opt/remnawave/nginx.conf | grep "server_name" | awk '{print $2}' | tr -d ';' | head -1)
-            fi
-            echo -e "  ${WHITE}Ссылки на подписку:${NC}"
-            echo ""
-            if [ -n "$selfsteal_dom" ]; then
-                echo -e "  ${CYAN}Base64 (v2rayNG, Hiddify):${NC}"
-                echo -e "  https://${selfsteal_dom}/hy/${sub_name}.txt"
-                echo ""
-                echo -e "  ${CYAN}Plain URI (Streisand, Shadowrocket):${NC}"
-                echo -e "  https://${selfsteal_dom}/hy/${sub_name}-plain.txt"
-            else
-                echo -e "  ${CYAN}Base64:${NC}  https://ВАША_SELFSTEAL_DOMAIN/hy/${sub_name}.txt"
-                echo -e "  ${CYAN}Plain:${NC}   https://ВАША_SELFSTEAL_DOMAIN/hy/${sub_name}-plain.txt"
-                warn "Не удалось определить selfsteal домен. Замените ВАША_SELFSTEAL_DOMAIN вручную."
-            fi
-            echo ""
-            ;;&
-        2|3)
-            local local_file="/root/hysteria-${dom}-${sub_name}.txt"
-            printf '%s
-' "${uris[@]}" > "$local_file"
-            ok "Локальный файл: $local_file"
-            ;;&
-        0) return ;;
-    esac
-
-    echo ""
-    echo -e "  ${YELLOW}Добавьте ссылку как отдельную подписку в клиент.${NC}"
-    echo -e "  ${YELLOW}Поддерживают: v2rayNG, Hiddify, Streisand, Shadowrocket, Clash.${NC}"
-}
+# hysteria_merge_sub удалена — используется hysteria_merge_sub (http.server, без зависимостей)
 
 # ── Merged подписка (Remnawave + Hysteria2) ──────────────────────
 hysteria_merge_sub() {
@@ -3981,7 +3725,7 @@ hysteria_merge_sub() {
     command -v python3 &>/dev/null || { warn "Требуется python3"; return 1; }
 
     local dom
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" | grep -- '- ' | head -1 | tr -d ' -')
+    dom=$(hy_get_domain)
 
     # Собираем URI Hysteria2
     local -a hy_uris=()
@@ -4141,8 +3885,8 @@ SVCEOF
 hysteria_menu() {
     local ver; ver=$(get_hysteria_version)
     local dom port
-    dom=$(grep -A2 'domains:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -- '- ' | head -1 | tr -d ' -' || echo "")
-    port=$(grep '^listen:' "$HYSTERIA_CONFIG" 2>/dev/null | grep -oE '[0-9]+$' || echo "")
+    dom=$(hy_get_domain 2>/dev/null || echo "")
+    port=$(hy_get_port 2>/dev/null || echo "")
     clear
     echo ""
     echo -e "${BOLD}${WHITE}  🚀  Hysteria2${NC}"
@@ -4213,823 +3957,50 @@ hysteria_submenu_users() {
 
 
 # ── Интеграция Hysteria2 → Remnawave (webhook + subscription-page) ────────────
+
+# Ожидаемая SHA256 контрольная сумма hy-sub-install.sh
+# Обновите это значение при каждом целевом обновлении скрипта
+HY_SUB_INSTALL_SHA256="REPLACE_WITH_ACTUAL_SHA256"
+
 hysteria_remnawave_integration() {
-    # Проверки предусловий — свои (не используем глобальный err чтобы не выходить)
-    [ "$(id -u)" -ne 0 ] && { warn "Требуются права root"; return 1; }
-    [ -d /opt/remnawave ] || { warn "Remnawave не установлена в /opt/remnawave"; return 1; }
-    [ -f /etc/hysteria/config.yaml ] || { warn "Hysteria2 не установлена (/etc/hysteria/config.yaml не найден)"; return 1; }
-
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║  Hysteria2 → Remnawave Subscription Integration                 ║
-# ║  Устанавливает:                                                  ║
-# ║  1. hy-webhook  — синхронизация пользователей через вебхук      ║
-# ║  2. Форк subscription-page — добавляет Hysteria2 URI в подписку ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
-# Проверки выполнены в начале функции
-
-# ── Режим: установка или переустановка ───────────────────────────
-local IS_INSTALLED=false
-[ -f /etc/systemd/system/hy-webhook.service ] && IS_INSTALLED=true
-
-if $IS_INSTALLED; then
-    # Читаем текущий secret из сервиса
-    EXISTING_SECRET=$(grep "^Environment=WEBHOOK_SECRET=" /etc/systemd/system/hy-webhook.service         | cut -d= -f3 || echo "")
-
-    echo ""
-    echo -e "${BOLD}${YELLOW}  ↻  Обнаружена существующая установка${NC}"
-    echo ""
-    echo -e "  ${DIM}hy-webhook:        ${NC}$(systemctl is-active hy-webhook 2>/dev/null || echo inactive)"
-    echo -e "  ${DIM}Пользователей в БД:${NC} $(python3 -c "import json; d=json.load(open('/var/lib/hy-webhook/users.json')); print(len(d))" 2>/dev/null || echo "?")"
-    echo ""
-    echo -e "${BOLD}${WHITE}  Что обновить?${NC}"
-    echo ""
-    echo -e "  1) Всё заново          ${DIM}— полная переустановка, новый secret${NC}"
-    echo -e "  2) Только webhook      ${DIM}— сервис + конфиг, secret сохранится${NC}"
-    echo -e "  3) Только subscription ${DIM}— пересборка Docker-образа форка${NC}"
-    echo -e "  0) Отмена"
-    echo ""
-    read -rp "  Выбор [0-3]: " REINSTALL_MODE < /dev/tty
-
-    case "$REINSTALL_MODE" in
-        1)
-            echo ""
-            echo -e "  ${YELLOW}Будет выполнено:${NC} полная переустановка, новый webhook secret"
-            echo -e "  ${DIM}Затронуто: hy-webhook.service, config.yaml, docker-compose.yml${NC}"
-            echo ""
-            read -rp "  Продолжить? [y/N]: " _confirm < /dev/tty
-            [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
-            STEP_TOTAL=6
-            ;;
-        2)
-            echo ""
-            echo -e "  ${YELLOW}Будет выполнено:${NC} обновление hy-webhook, secret сохраняется"
-            echo -e "  ${DIM}Затронуто: hy-webhook.py, hy-webhook.service${NC}"
-            echo -e "  ${DIM}Не затронуто: docker-compose.yml, subscription-page${NC}"
-            echo ""
-            read -rp "  Продолжить? [y/N]: " _confirm < /dev/tty
-            [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
-            WEBHOOK_SECRET="${EXISTING_SECRET}"
-            STEP_TOTAL=3
-            ;;
-        3)
-            echo ""
-            echo -e "  ${YELLOW}Будет выполнено:${NC} пересборка и перезапуск subscription-page"
-            echo -e "  ${DIM}Затронуто: Docker-образ, docker-compose.yml${NC}"
-            echo -e "  ${DIM}Не затронуто: hy-webhook, пользователи${NC}"
-            echo ""
-            read -rp "  Продолжить? [y/N]: " _confirm < /dev/tty
-            [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
-            STEP_TOTAL=2
-            ;;
-        0|"")
-            echo "Отменено."
-            exit 0
-            ;;
-        *)
-            err "Неверный выбор"
-            ;;
-    esac
-fi
-
-# ── Читаем параметры ─────────────────────────────────────────────
-step "Конфигурация"
-
-# Hysteria домен из конфига
-HY_DOMAIN=$(grep -A2 'domains:' /etc/hysteria/config.yaml | grep -- '- ' | head -1 | tr -d ' -')
-HY_PORT=$(grep '^listen:' /etc/hysteria/config.yaml | grep -oE '[0-9]+$')
-
-if [ -n "$HY_DOMAIN" ]; then
-    cfg_auto "Домен" "$HY_DOMAIN"
-else
-    warn "Домен не найден в конфиге Hysteria2"
-    read -rp "  Введите домен вручную: " HY_DOMAIN < /dev/tty
-    cfg_manual "Домен" "$HY_DOMAIN"
-fi
-
-if [ -n "$HY_PORT" ]; then
-    cfg_auto "Порт" "$HY_PORT"
-else
-    HY_PORT="443"
-    cfg_manual "Порт" "$HY_PORT (по умолчанию)"
-fi
-
-echo ""
-read -rp "  Название подключения [🇩🇪 Germany Hysteria2]: " HY_NAME < /dev/tty
-HY_NAME="${HY_NAME:-🇩🇪 Germany Hysteria2}"
-cfg_manual "Название" "$HY_NAME"
-
-# Читаем SUB_PUBLIC_DOMAIN из .env
-SUB_DOMAIN=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"')
-PANEL_URL=$(grep "^APP_PORT=" /opt/remnawave/.env 2>/dev/null && echo "http://127.0.0.1:3000" || echo "http://127.0.0.1:3000")
-
-# Генерируем webhook secret
-WEBHOOK_SECRET=$(openssl rand -hex 32)
-cfg_gen "Webhook secret" "${WEBHOOK_SECRET:0:8}…"
-
-# ── Шаг 1: Webhook сервис ────────────────────────────────────────
-# Пропускаем webhook если выбран режим "только subscription"
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" = "3" ]; then
-    :
-else
-step "Webhook сервис"
-
-mkdir -p /opt/hy-webhook /var/lib/hy-webhook
-
-cat > /opt/hy-webhook/hy-webhook.py << 'PYEOF'
-#!/usr/bin/env python3
-"""
-Remnawave → Hysteria2 Webhook Sync Service
-Слушает вебхуки Remnawave и синхронизирует пользователей с Hysteria2
-
-Заголовок подписи: X-Remnawave-Signature (HMAC-SHA256 от тела запроса)
-Источник: webhook-logger.processor.ts → createHmac('sha256', WEBHOOK_SECRET_HEADER)
-
-Санитизация имён: [a-zA-Z0-9_-], минимум 6 символов
-Источник: backend/src/common/utils/sanitize-username.ts
-"""
-
-import hashlib
-import hmac
-import json
-import logging
-import os
-import re
-import subprocess
-import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-# ── Конфиг ────────────────────────────────────────────────────────
-WEBHOOK_SECRET  = os.environ.get("WEBHOOK_SECRET", "")        # = WEBHOOK_SECRET_HEADER в .env панели
-HYSTERIA_CONFIG = os.environ.get("HYSTERIA_CONFIG", "/etc/hysteria/config.yaml")
-USERS_DB        = os.environ.get("USERS_DB", "/var/lib/hy-webhook/users.json")
-LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8766"))
-HYSTERIA_SVC    = os.environ.get("HYSTERIA_SVC", "hysteria-server")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-log = logging.getLogger("hy-webhook")
-
-# ── Утилиты ───────────────────────────────────────────────────────
-
-def load_users() -> dict:
-    """Загружает БД пользователей {safe_username: password}"""
-    os.makedirs(os.path.dirname(USERS_DB), exist_ok=True)
-    try:
-        with open(USERS_DB) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def save_users(users: dict):
-    """Сохраняет БД пользователей"""
-    os.makedirs(os.path.dirname(USERS_DB), exist_ok=True)
-    with open(USERS_DB, "w") as f:
-        json.dump(users, f, indent=2)
-
-
-def sanitize(username: str) -> str:
-    """
-    Санитизирует имя пользователя по правилам Remnawave.
-    Источник: backend/src/common/utils/sanitize-username.ts
-      - Допустимые символы: [a-zA-Z0-9_-]
-      - Точка НЕ допустима (заменяется на _)
-      - Минимальная длина: 6 символов, дополняется _
-    """
-    result = re.sub(r'[^a-zA-Z0-9_\-]', '_', username)
-    if len(result) < 6:
-        result = result + '_' * (6 - len(result))
-    return result
-
-
-def gen_password(safe_username: str) -> str:
-    """
-    Генерирует детерминированный пароль: sha256(safe_username:secret)[:32]
-    Пароль привязан к санитизированному имени — при одном и том же secret
-    всегда воспроизводится для того же пользователя.
-    """
-    seed = f"{safe_username}:{WEBHOOK_SECRET}"
-    return hashlib.sha256(seed.encode()).hexdigest()[:32]
-
-
-def reload_hysteria():
-    """Перезапускает hysteria-server через systemctl"""
-    try:
-        result = subprocess.run(
-            ["systemctl", "reload-or-restart", HYSTERIA_SVC],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            log.info("Hysteria2 перезапущен")
-        else:
-            log.warning(f"Ошибка перезапуска: {result.stderr.strip()}")
-    except Exception as e:
-        log.error(f"Не удалось перезапустить hysteria: {e}")
-
-
-def update_hysteria_config(users: dict) -> bool:
-    """Обновляет блок userpass в конфиге Hysteria2"""
-    try:
-        with open(HYSTERIA_CONFIG) as f:
-            config = f.read()
-
-        # Строим новый блок userpass
-        # Имена в users.json уже санитизированы, повторная обработка не нужна
-        userpass_lines = ["  userpass:"]
-        for username, password in users.items():
-            userpass_lines.append(f'    {username}: "{password}"')
-        new_userpass = "\n".join(userpass_lines)
-
-        # Заменяем существующий блок userpass
-        pattern = r'(\s*userpass:\s*\n(?:[ \t]+[^\n]+\n?)*)'
-        if re.search(pattern, config):
-            config = re.sub(pattern, "\n" + new_userpass + "\n", config)
-        else:
-            # Добавляем после строки "type: userpass"
-            config = re.sub(
-                r'(auth:\s*\n\s*type:\s*userpass\s*\n)',
-                r'\1' + new_userpass + "\n",
-                config
-            )
-
-        with open(HYSTERIA_CONFIG, "w") as f:
-            f.write(config)
-
-        log.info(f"Конфиг обновлён, пользователей: {len(users)}")
-        return True
-    except Exception as e:
-        log.error(f"Ошибка обновления конфига: {e}")
-        return False
-
-
-def verify_signature(body: bytes, signature: str) -> bool:
-    """
-    Проверяет подпись вебхука.
-    Remnawave отправляет заголовок X-Remnawave-Signature:
-      createHmac('sha256', WEBHOOK_SECRET_HEADER).update(payload).digest('hex')
-    Источник: webhook-logger.processor.ts
-    """
-    if not WEBHOOK_SECRET:
-        return True  # без секрета — принимаем всё (не рекомендуется в production)
-    expected = hmac.new(
-        WEBHOOK_SECRET.encode(),
-        body,
-        hashlib.sha256
-    ).hexdigest()
-    # Remnawave отправляет чистый hex без префикса "sha256="
-    return hmac.compare_digest(expected, signature.strip().lower())
-
-
-# ── Обработка событий ─────────────────────────────────────────────
-
-def _add_user(safe: str, users: dict) -> bool:
-    """Добавляет пользователя если его нет. Возвращает True если были изменения."""
-    if safe in users:
-        log.debug(f"Пользователь {safe} уже существует")
-        return False
-    users[safe] = gen_password(safe)
-    log.info(f"Добавлен: {safe}")
-    return True
-
-
-def _remove_user(safe: str, users: dict) -> bool:
-    """Удаляет пользователя если есть. Возвращает True если были изменения."""
-    if safe not in users:
-        log.debug(f"Пользователь {safe} не найден в БД")
-        return False
-    del users[safe]
-    log.info(f"Удалён: {safe}")
-    return True
-
-
-def process_event(payload: dict):
-    """
-    Обрабатывает вебхук событие от Remnawave.
-
-    Структура payload (scope: "user"):
-      {
-        "scope": "user",
-        "event": "user.created",
-        "timestamp": "...",
-        "data": { "username": "...", "shortUuid": "...", ... },  ← ExtendedUsersSchema
-        "meta": null
-      }
-
-    Полный список событий: backend/libs/contract/constants/events/events.ts
-    """
-    scope = payload.get("scope", "")
-    event = payload.get("event", "")
-    data  = payload.get("data", {})
-
-    if scope != "user":
-        log.debug(f"Пропуск события scope={scope}")
-        return
-
-    username = data.get("username", "")
-    if not username:
-        log.warning("Нет username в payload")
-        return
-
-    safe = sanitize(username)
-    log.info(f"Событие: {event}, пользователь: {username!r} → {safe!r}")
-
-    users   = load_users()
-    changed = False
-
-    # Пользователь активен — добавить/восстановить доступ
-    if event in ("user.created", "user.enabled", "user.traffic_reset"):
-        changed = _add_user(safe, users)
-
-    # Пользователь недоступен — убрать из конфига Hysteria2
-    elif event in ("user.deleted", "user.disabled", "user.limited", "user.expired"):
-        changed = _remove_user(safe, users)
-
-    # Остальные события (user.modified, user.revoked, user.expires_in_*,
-    # user.first_connected, user.bandwidth_usage_threshold_reached, user.not_connected)
-    # не влияют на доступ к Hysteria2
-    else:
-        log.debug(f"Событие {event!r} не требует изменений конфига")
-        return
-
-    if changed:
-        save_users(users)
-        if update_hysteria_config(users):
-            reload_hysteria()
-
-
-# ── HTTP сервер ───────────────────────────────────────────────────
-
-class WebhookHandler(BaseHTTPRequestHandler):
-
-    def log_message(self, format, *args):
-        pass  # используем собственный логгер вместо BaseHTTPServer
-
-    def do_GET(self):
-        if self.path == "/health":
-            users = load_users()
-            body = json.dumps({
-                "status": "ok",
-                "users": len(users),
-                "secret_set": bool(WEBHOOK_SECRET),
-            }).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self):
-        if self.path != "/webhook":
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-
-        # Remnawave подписывает тело заголовком X-Remnawave-Signature
-        # Источник: webhook-logger.processor.ts
-        signature = self.headers.get("X-Remnawave-Signature", "")
-        if WEBHOOK_SECRET and not verify_signature(body, signature):
-            log.warning(
-                f"Неверная подпись. "
-                f"Получен: {signature[:16] + '…' if signature else '(пусто)'}, "
-                f"IP: {self.client_address[0]}"
-            )
-            self.send_response(401)
-            self.end_headers()
-            return
-
-        try:
-            payload = json.loads(body)
-            process_event(payload)
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"ok")
-        except json.JSONDecodeError:
-            log.error("Невалидный JSON в теле запроса")
-            self.send_response(400)
-            self.end_headers()
-        except Exception as e:
-            log.error(f"Ошибка обработки события: {e}", exc_info=True)
-            self.send_response(500)
-            self.end_headers()
-
-
-def main():
-    log.info(f"Запуск hy-webhook на порту {LISTEN_PORT}")
-    log.info(f"Hysteria конфиг: {HYSTERIA_CONFIG}")
-    log.info(f"БД пользователей: {USERS_DB}")
-    log.info(
-        f"Подпись: {'включена (X-Remnawave-Signature)' if WEBHOOK_SECRET else 'ОТКЛЮЧЕНА — установите WEBHOOK_SECRET!'}"
-    )
-
-    # При старте применяем текущую БД к конфигу Hysteria2
-    users = load_users()
-    if users:
-        log.info(f"Загружено {len(users)} пользователей из БД, синхронизируем конфиг...")
-        update_hysteria_config(users)
-    else:
-        log.info("БД пуста — ожидаем первые события")
-
-    server = HTTPServer(("127.0.0.1", LISTEN_PORT), WebhookHandler)
-    log.info("Готов принимать вебхуки")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        log.info("Остановка сервиса")
-
-
-if __name__ == "__main__":
-    main()
-
-PYEOF
-
-chmod +x /opt/hy-webhook/hy-webhook.py
-ok "hy-webhook.py создан"
-info "/opt/hy-webhook/hy-webhook.py"
-
-# Systemd сервис
-cat > /etc/systemd/system/hy-webhook.service << SVCEOF
-[Unit]
-Description=Remnawave → Hysteria2 Webhook Sync
-After=network.target hysteria-server.service
-
-[Service]
-Type=simple
-Environment=WEBHOOK_SECRET=${WEBHOOK_SECRET}
-Environment=HYSTERIA_CONFIG=/etc/hysteria/config.yaml
-Environment=USERS_DB=/var/lib/hy-webhook/users.json
-Environment=LISTEN_PORT=8766
-Environment=HYSTERIA_SVC=hysteria-server
-ExecStart=/usr/bin/python3 /opt/hy-webhook/hy-webhook.py
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-
-systemctl daemon-reload
-systemctl enable --now hy-webhook
-sleep 2
-
-if systemctl is-active --quiet hy-webhook; then
-    ok "hy-webhook запущен"
-    info "$(systemctl status hy-webhook --no-pager | grep Active: | sed 's/.*Active: //)"
-else
-    warn "hy-webhook не запустился"
-    info "Диагностика: journalctl -u hy-webhook -n 20"
-fi
-fi  # end skip mode3 webhook
-
-# ── Шаг 2: Синхронизируем существующих пользователей ────────────
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" = "3" ]; then
-    :
-else
-step "Синхронизация пользователей"
-
-# Читаем существующих из конфига Hysteria
-python3 << SYNCEOF
-import re, json, hashlib, os
-
-HYSTERIA_CONFIG = "/etc/hysteria/config.yaml"
-USERS_DB = "/var/lib/hy-webhook/users.json"
-WEBHOOK_SECRET = "${WEBHOOK_SECRET}"
-
-with open(HYSTERIA_CONFIG) as f:
-    config = f.read()
-
-# Парсим существующих пользователей из userpass блока
-users = {}
-in_userpass = False
-for line in config.split('\n'):
-    if 'userpass:' in line:
-        in_userpass = True
-        continue
-    if in_userpass:
-        m = re.match(r'\s{4}(\S+):\s*"([^"]+)"', line)
-        if m:
-            users[m.group(1)] = m.group(2)
-        elif line.strip() and not line.startswith(' '):
-            break
-
-os.makedirs(os.path.dirname(USERS_DB), exist_ok=True)
-with open(USERS_DB, 'w') as f:
-    json.dump(users, f, indent=2)
-
-print(f"Синхронизировано пользователей: {len(users)}")
-for u in users:
-    print(f"  - {u}")
-SYNCEOF
-
-ok "Пользователи синхронизированы"
-fi  # end skip sync
-
-# ── Шаг 3: Включаем вебхуки в панели ────────────────────────────
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" != "1" ]; then
-    :  # При частичном обновлении не трогаем .env
-else
-step "Вебхуки Remnawave"
-
-# Обновляем .env
-sed -i "s|^WEBHOOK_ENABLED=.*|WEBHOOK_ENABLED=true|" /opt/remnawave/.env
-sed -i "s|^WEBHOOK_URL=.*|WEBHOOK_URL=http://127.0.0.1:8766/webhook|" /opt/remnawave/.env
-sed -i "s|^WEBHOOK_SECRET_HEADER=.*|WEBHOOK_SECRET_HEADER=${WEBHOOK_SECRET}|" /opt/remnawave/.env
-
-ok "Вебхуки включены в .env"
-info "WEBHOOK_URL=http://127.0.0.1:8766/webhook"
-
-# Перезапускаем панель
-info "Перезапускаем Remnawave..."
-cd /opt/remnawave && docker compose restart remnawave >/dev/null 2>&1
-ok "Remnawave перезапущена"
-fi  # end skip webhooks
-
-# ── Шаг 4: Форк subscription-page ───────────────────────────────
-step "Форк subscription-page"
-
-# Проверяем есть ли Docker
-command -v docker &>/dev/null || err "Docker не найден"
-
-# Определяем текущий образ subscription-page
-CURRENT_IMAGE=$(grep "image:" /opt/remnawave/docker-compose.yml | grep -i "subscription" | awk '{print $2}' | head -1)
-info "Текущий образ: $CURRENT_IMAGE"
-
-# Создаём директорию для форка
-mkdir -p /opt/hy-subpage
-
-# Скачиваем исходники subscription-page
-info "Скачиваем исходники subscription-page..."
-SUBPAGE_VERSION=$(echo "$CURRENT_IMAGE" | grep -oP ':\K[^:]+$' || echo "latest")
-curl -fsSL "https://github.com/remnawave/subscription-page/archive/refs/heads/main.tar.gz" \
-    -o /opt/hy-subpage/source.tar.gz 2>/dev/null \
-    || { warn "Не удалось скачать исходники — нужен интернет на сервере"; exit 1; }
-
-tar -xzf /opt/hy-subpage/source.tar.gz -C /opt/hy-subpage --strip-components=1
-rm /opt/hy-subpage/source.tar.gz
-ok "Исходники скачаны"
-
-# Применяем патч к root.service.ts
-ROOTSVC="/opt/hy-subpage/backend/src/modules/root/root.service.ts"
-AXSVC="/opt/hy-subpage/backend/src/common/axios/axios.service.ts"
-
-# Патч 1: Добавляем импорт fs
-sed -i "s|import { nanoid } from 'nanoid';|import { nanoid } from 'nanoid';\nimport * as fs from 'node:fs';|" "$ROOTSVC"
-
-# Патч 2: Инжектируем Hysteria2 URI в ответ подписки
-python3 << PATCHEOF
-import re
-
-with open("$ROOTSVC") as f:
-    content = f.read()
-
-old = "            if (!subscriptionDataResponse) {\n                res.socket?.destroy();\n                return;\n            }\n\n            if (subscriptionDataResponse.headers) {"
-
-new = """            if (!subscriptionDataResponse) {
-                res.socket?.destroy();
-                return;
-            }
-
-            // ── Hysteria2 URI injection ──────────────────────────
-            try {
-                const hyUri = await this.getHysteriaUriForUser(shortUuidLocal, clientIp);
-                if (hyUri) {
-                    const raw = subscriptionDataResponse.response as string;
-                    let lines: string[] = [];
-                    try {
-                        lines = Buffer.from(raw, 'base64').toString('utf-8')
-                            .split('\\n').filter(l => l.trim());
-                    } catch {
-                        lines = raw.split('\\n').filter(l => l.trim());
-                    }
-                    lines.push(hyUri);
-                    subscriptionDataResponse = {
-                        ...subscriptionDataResponse,
-                        response: Buffer.from(lines.join('\\n')).toString('base64'),
-                    };
-                }
-            } catch (e) {
-                this.logger.warn('Hysteria2 inject error: ' + e);
-            }
-            // ─────────────────────────────────────────────────────
-
-            if (subscriptionDataResponse.headers) {"""
-
-if old in content:
-    content = content.replace(old, new)
-    print("OK: inject добавлен")
-else:
-    print("WARN: inject не найден — возможно версия отличается")
-
-# Добавляем метод getHysteriaUriForUser перед последней }
-method = '''
-    private async getHysteriaUriForUser(
-        shortUuid: string,
-        clientIp: string,
-    ): Promise<string | null> {
-        try {
-            const usersDb = process.env.HY_USERS_DB || '/var/lib/hy-webhook/users.json';
-            const hyDomain = process.env.HY_DOMAIN || '';
-            const hyPort = process.env.HY_PORT || '8443';
-            const hyName = process.env.HY_NAME || 'Hysteria2';
-            if (!hyDomain) return null;
-            let users: Record<string, string> = {};
-            try {
-                const raw = fs.readFileSync(usersDb, 'utf-8');
-                users = JSON.parse(raw);
-            } catch { return null; }
-            const userInfo = await this.axiosService.getUserByShortUuid(clientIp, shortUuid);
-            if (!userInfo.isOk || !userInfo.response) return null;
-            const username = (userInfo.response as any).response?.username;
-            if (!username) return null;
-            const safeUsername = username.replace(/[^a-zA-Z0-9_\-]/g, '_').padEnd(6, '_').slice(0, Math.max(6, username.replace(/[^a-zA-Z0-9_\-]/g, '_').length));
-            const password = users[safeUsername] || users[username];
-            if (!password) return null;
-            return 'hy2://' + encodeURIComponent(safeUsername) + ':' + password +
-                '@' + hyDomain + ':' + hyPort +
-                '?sni=' + hyDomain + '&alpn=h3&insecure=0#' + encodeURIComponent(hyName);
-        } catch (e) {
-            this.logger.warn('getHysteriaUriForUser error: ' + e);
-            return null;
-        }
-    }
-}
-'''
-content = content.rstrip()
-if content.endswith('}'):
-    content = content[:-1].rstrip() + '\n' + method
-
-with open("$ROOTSVC", 'w') as f:
-    f.write(content)
-print("OK: метод добавлен")
-PATCHEOF
-
-# Патч 3: Добавляем getUserByShortUuid в axios.service.ts
-python3 << AXPATCHEOF
-with open("$AXSVC") as f:
-    content = f.read()
-
-method = '''
-    public async getUserByShortUuid(
-        clientIp: string,
-        shortUuid: string,
-    ): Promise<any> {
-        try {
-            const { data } = await this.axiosInstance.request({
-                method: 'GET',
-                url: 'api/users/by-short-uuid/' + shortUuid,
-                headers: { 'x-remnawave-real-ip': clientIp },
-            });
-            return { isOk: true, response: data };
-        } catch (error: any) {
-            this.logger.error('Error in GetUserByShortUuid: ' + error.message);
-            return { isOk: false };
-        }
-    }
-'''
-
-# Вставляем перед последним методом getSubscription
-insert_before = "    public async getSubscription("
-if insert_before in content:
-    content = content.replace(insert_before, method + "\n    public async getSubscription(", 1)
-    print("OK: getUserByShortUuid добавлен")
-else:
-    print("WARN: место вставки не найдено")
-
-with open("$AXSVC", 'w') as f:
-    f.write(content)
-AXPATCHEOF
-
-ok "Патчи применены"
-
-# Собираем Docker образ
-info "Сборка Docker образа (это займёт 2-5 минут)..."
-cd /opt/hy-subpage
-
-# Сначала собираем frontend если нужно
-if [ ! -d "frontend/dist" ]; then
-    info "Сборка frontend..."
-    docker run --rm -v "$(pwd)/frontend:/app" -w /app node:24-alpine \
-        sh -c "npm ci && npm run build" >/dev/null 2>&1 \
-        && ok "Frontend собран" \
-        || warn "Ошибка сборки frontend — используем существующий образ"
-fi
-
-info "Сборка может занять 2-5 минут..."
-timeout 600 docker build -t remnawave-sub-hy:local . 2>&1 | tail -5 \
-  || err "Сборка Docker-образа не завершилась за 10 минут"
-ok "Docker образ собран: remnawave-sub-hy:local"
-
-# ── Шаг 5: Обновляем docker-compose.yml ─────────────────────────
-step "Docker Compose"
-
-python3 << COMPOSEEOF
-import re
-
-with open("/opt/remnawave/docker-compose.yml") as f:
-    content = f.read()
-
-# Меняем образ subscription-page
-content = re.sub(
-    r'(remnawave-subscription-page:.*?\n\s+image:\s*)remnawave/subscription-page:[^\n]+',
-    r'\1remnawave-sub-hy:local',
-    content,
-    flags=re.DOTALL
-)
-
-# Добавляем environment и volumes к subscription-page
-env_block = """    environment:
-      - HY_DOMAIN=${HY_DOMAIN}
-      - HY_PORT=${HY_PORT}
-      - HY_NAME=${HY_NAME}
-      - HY_USERS_DB=/var/lib/hy-webhook/users.json
-    volumes:
-      - /var/lib/hy-webhook:/var/lib/hy-webhook:ro"""
-
-# Находим блок remnawave-subscription-page и добавляем после image:
-pattern = r'(container_name: remnawave-subscription-page\n)'
-if re.search(pattern, content):
-    content = re.sub(pattern, r'\1' + env_block + '\n', content)
-    print("OK: docker-compose обновлён")
-else:
-    print("WARN: блок subscription-page не найден")
-
-with open("/opt/remnawave/docker-compose.yml", "w") as f:
-    f.write(content)
-COMPOSEEOF
-
-# Перезапускаем subscription-page
-cd /opt/remnawave
-docker compose up -d remnawave-subscription-page 2>&1 | tail -3
-sleep 3
-
-if docker ps --format '{{.Names}}' | grep -q "remnawave-subscription-page"; then
-    ok "subscription-page запущен с форком"
-    info "Образ: remnawave-sub-hy:local"
-else
-    warn "Контейнер не запустился"
-    info "Диагностика: docker logs remnawave-subscription-page"
-fi
-
-# ── Итог ────────────────────────────────────────────────────────
-
-# Проверяем статусы сервисов
-HY_WH_STATUS=$(systemctl is-active hy-webhook 2>/dev/null || echo "inactive")
-HY_SVC_STATUS=$(systemctl is-active hysteria-server 2>/dev/null || echo "inactive")
-SUB_STATUS=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -q "remnawave-subscription-page" && echo "running" || echo "stopped")
-
-# _svc_line() — из server-manager
-✓${NC}  $name"
-    else
-        echo -e "  ${RED}✗${NC}  $name ${DIM}($status)${NC}"
+    local script_url="https://raw.githubusercontent.com/stump3/setup_rth/main/hy-sub-install.sh"
+    local tmp; tmp=$(mktemp /tmp/hy-sub-install.XXXXXX.sh)
+
+    info "Скачиваем hy-sub-install.sh..."
+    if ! curl -fsSL "$script_url" -o "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        err "Не удалось скачать hy-sub-install.sh с GitHub"
+        return 1
     fi
-}
 
-echo ""
-echo -e "${BOLD}${GREEN}  ✅ Установка завершена!${NC}"
-echo ""
-echo -e "${BOLD}${WHITE}  Статус сервисов${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-_svc_line "hy-webhook" "$HY_WH_STATUS"
-_svc_line "hysteria-server" "$HY_SVC_STATUS"
-_svc_line "subscription-page" "$SUB_STATUS"
-echo ""
-echo -e "${BOLD}${WHITE}  Конфигурация${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-echo -e "  ${DIM}Домен   ${NC}${HY_DOMAIN}"
-echo -e "  ${DIM}Порт    ${NC}${HY_PORT}"
-echo -e "  ${DIM}Название${NC}${HY_NAME}"
-echo ""
-if $IS_INSTALLED && [ "${REINSTALL_MODE:-1}" = "2" ]; then
-    echo -e "${BOLD}${WHITE}  Webhook secret${NC}${DIM} (не изменился)${NC}"
-    echo -e "  ${DIM}────────────────────────────${NC}"
-    echo -e "  ${DIM}${WEBHOOK_SECRET}${NC}"
-else
-    echo -e "${BOLD}${YELLOW}  ⚠  Webhook secret — сохраните сейчас, больше не показывается!${NC}"
-    echo -e "  ${DIM}────────────────────────────${NC}"
-    echo -e "  ${CYAN}${WEBHOOK_SECRET}${NC}"
-fi
-echo ""
-echo -e "${BOLD}${WHITE}  Проверка${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-echo -e "  ${DIM}Health:  ${NC}curl -s http://127.0.0.1:8766/health"
-echo -e "  ${DIM}Логи:    ${NC}journalctl -u hy-webhook -f"
-echo -e "  ${DIM}Контейнер: ${NC}docker logs remnawave-subscription-page"
-echo ""
-echo -e "${BOLD}${WHITE}  Что дальше${NC}"
-echo -e "  ${DIM}────────────────────────────${NC}"
-echo -e "  • Новые пользователи панели получат Hysteria2 URI автоматически"
-echo -e "  • Существующим пользователям — попросите обновить подписку в клиенте"
-echo ""
+    # ── Проверка контрольной суммы ────────────────────────────────
+    if [ "$HY_SUB_INSTALL_SHA256" != "REPLACE_WITH_ACTUAL_SHA256" ]; then
+        local actual_sha
+        actual_sha=$(sha256sum "$tmp" | awk '"'"'{print $1}'"'"')
+        if [ "$actual_sha" != "$HY_SUB_INSTALL_SHA256" ]; then
+            rm -f "$tmp"
+            err "Контрольная сумма не совпадает!
+  Ожидалось: $HY_SUB_INSTALL_SHA256
+  Получено:  $actual_sha
+  Скрипт не будет выполнен. Возможна компрометация репозитория."
+            return 1
+        fi
+        ok "Контрольная сумма верна ✓"
+    else
+        warn "Контрольная сумма не задана — выполнение без проверки"
+        warn "Установите HY_SUB_INSTALL_SHA256 для защиты от компрометации"
+        echo ""
+        if ! confirm "Продолжить без проверки контрольной суммы?" n; then
+            rm -f "$tmp"
+            return 1
+        fi
+    fi
+
+    chmod +x "$tmp"
+    bash "$tmp"
+    local rc=$?
+    rm -f "$tmp"
+    return $rc
 }
 
 hysteria_submenu_sub() {
@@ -5043,7 +4014,7 @@ hysteria_submenu_sub() {
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
         1) hysteria_publish_sub; read -rp "Enter..." < /dev/tty ;;
-        2) hysteria_setup_merger; read -rp "Enter..." < /dev/tty ;;
+        2) hysteria_merge_sub; read -rp "Enter..." < /dev/tty ;;
         3) hysteria_remnawave_integration ;;
         0) return ;;
         *) warn "Неверный выбор" ;;
@@ -5112,67 +4083,68 @@ panel_backup_restore() {
 # ═══════════════════════════════════════════════════════════════════
 
 main_menu() {
-    clear
-    echo ""
-    echo -e "${BOLD}${PURPLE}  SERVER-MANAGER${NC}${GRAY}  ${SCRIPT_VERSION}${NC}"
-    echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
-    echo ""
+    while true; do
+        clear
+        echo ""
+        echo -e "${BOLD}${PURPLE}  SERVER-MANAGER${NC}${GRAY}  ${SCRIPT_VERSION}${NC}"
+        echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
+        echo ""
 
-    # Быстрый статус с версиями
-    local panel_status telemt_status hysteria_status
-    local rw_ver hy_ver
-    rw_ver=$(get_remnawave_version 2>/dev/null)
-    hy_ver=$(get_hysteria_version 2>/dev/null)
+        # Быстрый статус с версиями
+        local panel_status telemt_status hysteria_status
+        local rw_ver hy_ver
+        rw_ver=$(get_remnawave_version 2>/dev/null)
+        hy_ver=$(get_hysteria_version 2>/dev/null)
 
-    if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
-        panel_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}v${rw_ver}${NC}}"
-    elif [ -d /opt/remnawave ]; then
-        panel_status="${YELLOW}◐${NC} остановлена"
-    else
-        panel_status="${GRAY}○ не установлена${NC}"
-    fi
+        if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
+            panel_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}v${rw_ver}${NC}}"
+        elif [ -d /opt/remnawave ]; then
+            panel_status="${YELLOW}◐${NC} остановлена"
+        else
+            panel_status="${GRAY}○ не установлена${NC}"
+        fi
 
-    if systemctl is-active --quiet telemt 2>/dev/null; then
-        telemt_status="${GREEN}●${NC} запущен (systemd)"
-    elif { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^telemt$"; then
-        telemt_status="${GREEN}●${NC} запущен (Docker)"
-    elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
-        telemt_status="${YELLOW}◐${NC} остановлен"
-    else
-        telemt_status="${GRAY}○ не установлен${NC}"
-    fi
+        if systemctl is-active --quiet telemt 2>/dev/null; then
+            telemt_status="${GREEN}●${NC} запущен (systemd)"
+        elif { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^telemt$"; then
+            telemt_status="${GREEN}●${NC} запущен (Docker)"
+        elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
+            telemt_status="${YELLOW}◐${NC} остановлен"
+        else
+            telemt_status="${GRAY}○ не установлен${NC}"
+        fi
 
-    if hy_is_running 2>/dev/null; then
-        hysteria_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}v${hy_ver}${NC}}"
-    elif hy_is_installed 2>/dev/null; then
-        hysteria_status="${YELLOW}◐${NC} остановлена"
-    else
-        hysteria_status="${GRAY}○ не установлена${NC}"
-    fi
+        if hy_is_running 2>/dev/null; then
+            hysteria_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}v${hy_ver}${NC}}"
+        elif hy_is_installed 2>/dev/null; then
+            hysteria_status="${YELLOW}◐${NC} остановлена"
+        else
+            hysteria_status="${GRAY}○ не установлена${NC}"
+        fi
 
-    echo -e "  ${GRAY}Remnawave Panel  ${NC}$(echo -e "$panel_status")"
-    echo -e "  ${GRAY}MTProxy (telemt) ${NC}$(echo -e "$telemt_status")"
-    echo -e "  ${GRAY}Hysteria2        ${NC}$(echo -e "$hysteria_status")"
-    echo ""
-    echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
-    echo ""
-    echo -e "  ${BOLD}1)${RESET}  🛡️   Remnawave Panel"
-    echo -e "  ${BOLD}2)${RESET}  📡  MTProxy (telemt)"
-    echo -e "  ${BOLD}3)${RESET}  🚀  Hysteria2"
-    echo -e "  ${BOLD}4)${RESET}  📦  Перенос"
-    echo ""
-    echo -e "  ${BOLD}0)${RESET}  Выход"
-    echo ""
-    local ch; read -rp "  Выбор: " ch
-    case "$ch" in
-        1) panel_menu ;;
-        2) telemt_section ;;
-        3) hysteria_menu ;;
-        4) migrate_menu ;;
-        0) exit 0 ;;
-        *) warn "Неверный выбор" ;;
-    esac
-    main_menu
+        echo -e "  ${GRAY}Remnawave Panel  ${NC}$(echo -e "$panel_status")"
+        echo -e "  ${GRAY}MTProxy (telemt) ${NC}$(echo -e "$telemt_status")"
+        echo -e "  ${GRAY}Hysteria2        ${NC}$(echo -e "$hysteria_status")"
+        echo ""
+        echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
+        echo ""
+        echo -e "  ${BOLD}1)${RESET}  🛡️   Remnawave Panel"
+        echo -e "  ${BOLD}2)${RESET}  📡  MTProxy (telemt)"
+        echo -e "  ${BOLD}3)${RESET}  🚀  Hysteria2"
+        echo -e "  ${BOLD}4)${RESET}  📦  Перенос"
+        echo ""
+        echo -e "  ${BOLD}0)${RESET}  Выход"
+        echo ""
+        local ch; read -rp "  Выбор: " ch
+        case "$ch" in
+            1) panel_menu ;;
+            2) telemt_section ;;
+            3) hysteria_menu ;;
+            4) migrate_menu ;;
+            0) exit 0 ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
 }
 
 # ─── Точка входа ───────────────────────────────────────────────────
