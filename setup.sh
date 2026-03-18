@@ -1100,8 +1100,7 @@ do_status() {
             || echo -e "  ${RED}○${NC} $c"
     done
     echo ""
-    docker stats --no-stream --format "  {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null | \
-        grep -E "remnawave|remnanode" | sort
+    docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null |         grep -E "remnawave|remnanode" | sort |         awk -F"\t" '{printf "  %-36s %6s   %s\n", $1, $2, $3}' 
 }
 do_logs() {
     local s="${1:-panel}"; cd "$DIR"
@@ -1982,7 +1981,7 @@ panel_submenu_manage() {
     echo -e "  ${BOLD}1)${RESET} 📋  Логи"
     echo -e "  ${BOLD}2)${RESET} 📊  Статус"
     echo -e "  ${BOLD}3)${RESET} 🔄  Перезапустить"
-    echo -e "  ${BOLD}4)${RESET} ▶️   Старт"
+    echo -e "  ${BOLD}4)${RESET} ▶️  Старт"
     echo -e "  ${BOLD}5)${RESET} 📦  Обновить"
     echo -e "  ${BOLD}6)${RESET} 🔒  SSL"
     echo -e "  ${BOLD}7)${RESET} 💾  Бэкап"
