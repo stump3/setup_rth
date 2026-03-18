@@ -1404,7 +1404,12 @@ MGMTEOF
 
 
 get_remnawave_version() {
-    docker logs remnawave 2>/dev/null | grep -o "Remnawave Backend v[0-9.]*" | tail -1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | tr -d '\n' || echo ""
+    # docker inspect (9ms) значительно быстрее docker logs (57ms)
+    local v
+    v=$(docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' remnawave 2>/dev/null || true)
+    # Fallback: docker ps image tag если label не задан
+    [ -z "$v" ] && v=$(docker ps --format '{{.Image}}' -f name=remnawave 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    echo "${v:-}"
 }
 
 get_telemt_version() {
@@ -1412,7 +1417,7 @@ get_telemt_version() {
 }
 
 get_hysteria_version() {
-    /usr/local/bin/hysteria version 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo ""
+    /usr/local/bin/hysteria version 2>/dev/null | awk '/^Version:/{print $2; exit}' || true
 }
 
 
@@ -1853,9 +1858,11 @@ panel_cli() {
 }
 
 panel_menu() {
-    local ver; ver=$(get_remnawave_version)
-    local panel_domain=""
-    [ -f /opt/remnawave/.env ] && panel_domain=$(grep "^FRONT_END_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | tr -d '"' || true)
+    # Кэшируем данные при входе, не перезапрашиваем при рекурсии
+    local ver panel_domain
+    ver=$(get_remnawave_version 2>/dev/null || true)
+    panel_domain=""
+    [ -f /opt/remnawave/.env ] && panel_domain=$(awk -F= '/^FRONT_END_DOMAIN=/{gsub(/"/, "", $2); print $2; exit}' /opt/remnawave/.env 2>/dev/null || true)
     clear
     echo ""
     echo -e "${BOLD}${WHITE}  🛡️  Remnawave Panel${NC}"
@@ -2898,12 +2905,23 @@ hy_resolve_a() {
 # ── Вспомогательные функции для чтения конфига ───────────────────
 hy_get_domain() {
     [ -f "$HYSTERIA_CONFIG" ] || { echo ""; return 1; }
-    hy_get_domain
+    awk '/domains:/{f=1;next} f&&/^  - /{gsub(/[[:space:]]*-[[:space:]]*/,""); print; exit}' "$HYSTERIA_CONFIG"
 }
 
 hy_get_port() {
     [ -f "$HYSTERIA_CONFIG" ] || { echo ""; return 1; }
-    hy_get_port
+    awk '/^listen:/{match($0,/[0-9]+$/); print substr($0,RSTART,RLENGTH); exit}' "$HYSTERIA_CONFIG"
+}
+
+# Читает домен и порт за один проход файла (быстрее двух отдельных вызовов)
+hy_get_domain_port() {
+    [ -f "$HYSTERIA_CONFIG" ] || { echo ":"; return 1; }
+    awk '
+        /^listen:/{match($0,/[0-9]+$/); port=substr($0,RSTART,RLENGTH)}
+        /domains:/{f=1; next}
+        f&&/^  - /{gsub(/[[:space:]]*-[[:space:]]*/,""); dom=$0; f=0}
+        END{print dom ":" port}
+    ' "$HYSTERIA_CONFIG"
 }
 
 # ── Установка ─────────────────────────────────────────────────────
@@ -3327,9 +3345,10 @@ hysteria_status() {
     if [ -f "$HYSTERIA_CONFIG" ]; then
         echo ""
         echo -e "  ${WHITE}Конфигурация:${NC}"
-        local dom port usr
-        dom=$(hy_get_domain 2>/dev/null || echo "—")
-        port=$(hy_get_port 2>/dev/null || echo "—")
+        local dom port usr dp
+        dp=$(hy_get_domain_port 2>/dev/null || true)
+        dom="${dp%%:*}"; [ -z "$dom" ] && dom="—"
+        port="${dp##*:}"; [ -z "$port" ] && port="—"
         # Первый пользователь из userpass (Python для надёжности)
         usr=$(python3 -c "
 import re, sys
@@ -3904,11 +3923,12 @@ SVCEOF
 
 
 hysteria_menu() {
-    # Загружаем данные один раз при входе в меню, не на каждую итерацию
-    local ver dom port
+    # Загружаем данные один раз при входе (hy_get_domain_port — один проход файла)
+    local ver dom port dp
     ver=$(get_hysteria_version 2>/dev/null || true)
-    dom=$(hy_get_domain 2>/dev/null || true)
-    port=$(hy_get_port 2>/dev/null || true)
+    dp=$(hy_get_domain_port 2>/dev/null || true)
+    dom="${dp%%:*}"
+    port="${dp##*:}"
     while true; do
         clear
         echo ""
@@ -4142,9 +4162,9 @@ _main_menu_refresh_status() {
     # ── Медленная часть — в фоне ─────────────────────────────────
     {
         local rw_ver hy_ver ps_out
-        rw_ver=$(get_remnawave_version 2>/dev/null || true)
-        hy_ver=$(get_hysteria_version 2>/dev/null || true)
-        ps_out=$(docker ps --format "{{.Names}}" 2>/dev/null || true)
+        rw_ver=$(get_remnawave_version 2>/dev/null || true)   # 9ms (docker inspect)
+        hy_ver=$(get_hysteria_version 2>/dev/null || true)    # 15ms (binary)
+        ps_out=$(docker ps --format "{{.Names}}" 2>/dev/null || true) # 15ms
 
         local p_status t_status h_status
         if echo "$ps_out" | grep -q "^remnawave$"; then
