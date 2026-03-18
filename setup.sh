@@ -4108,25 +4108,17 @@ panel_backup_restore() {
 # ГЛАВНОЕ МЕНЮ
 # ═══════════════════════════════════════════════════════════════════
 
+# Файлы кэша статусов (обновляются асинхронно)
+_STATUS_CACHE="/tmp/.sm_status_$$"
+
 _main_menu_refresh_status() {
-    # Вызывается один раз при входе и после возврата из подменю
-    # Разделено на быструю (systemctl/файлы) и медленную (docker/версии) части
-    local rw_ver hy_ver
-    rw_ver=$(get_remnawave_version 2>/dev/null || true)
-    hy_ver=$(get_hysteria_version 2>/dev/null || true)
+    # Разделено на две части:
+    # 1. Быстрая — systemctl + файлы (мгновенно, блокирующая)
+    # 2. Медленная — docker ps + версии (в фоне, неблокирующая)
 
-    if { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^remnawave$"; then
-        _PANEL_STATUS="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
-    elif [ -d /opt/remnawave ]; then
-        _PANEL_STATUS="${YELLOW}◐${NC} остановлена"
-    else
-        _PANEL_STATUS="${GRAY}○ не установлена${NC}"
-    fi
-
+    # ── Быстрая часть ───────────────────────────────────────────
     if systemctl is-active --quiet telemt 2>/dev/null; then
         _TELEMT_STATUS="${GREEN}●${NC} запущен (systemd)"
-    elif { docker ps --format '{{.Names}}' 2>/dev/null || true; } | grep -q "^telemt$"; then
-        _TELEMT_STATUS="${GREEN}●${NC} запущен (Docker)"
     elif [ -f "$TELEMT_CONFIG_SYSTEMD" ] || [ -f "$TELEMT_CONFIG_DOCKER" ]; then
         _TELEMT_STATUS="${YELLOW}◐${NC} остановлен"
     else
@@ -4134,18 +4126,78 @@ _main_menu_refresh_status() {
     fi
 
     if hy_is_running 2>/dev/null; then
-        _HYSTERIA_STATUS="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
+        _HYSTERIA_STATUS="${GREEN}●${NC} запущена"
     elif hy_is_installed 2>/dev/null; then
         _HYSTERIA_STATUS="${YELLOW}◐${NC} остановлена"
     else
         _HYSTERIA_STATUS="${GRAY}○ не установлена${NC}"
     fi
+
+    if [ -d /opt/remnawave ]; then
+        _PANEL_STATUS="${YELLOW}◐${NC} остановлена"
+    else
+        _PANEL_STATUS="${GRAY}○ не установлена${NC}"
+    fi
+
+    # ── Медленная часть — в фоне ─────────────────────────────────
+    {
+        local rw_ver hy_ver ps_out
+        rw_ver=$(get_remnawave_version 2>/dev/null || true)
+        hy_ver=$(get_hysteria_version 2>/dev/null || true)
+        ps_out=$(docker ps --format "{{.Names}}" 2>/dev/null || true)
+
+        local p_status t_status h_status
+        if echo "$ps_out" | grep -q "^remnawave$"; then
+            p_status="${GREEN}●${NC} запущена${rw_ver:+  ${GRAY}${rw_ver}${NC}}"
+        elif [ -d /opt/remnawave ]; then
+            p_status="${YELLOW}◐${NC} остановлена"
+        else
+            p_status="${GRAY}○ не установлена${NC}"
+        fi
+
+        if echo "$ps_out" | grep -q "^telemt$"; then
+            t_status="${GREEN}●${NC} запущен (Docker)"
+        fi
+
+        if hy_is_running 2>/dev/null; then
+            h_status="${GREEN}●${NC} запущена${hy_ver:+  ${GRAY}${hy_ver}${NC}}"
+        elif hy_is_installed 2>/dev/null; then
+            h_status="${YELLOW}◐${NC} остановлена"
+        else
+            h_status="${GRAY}○ не установлена${NC}"
+        fi
+
+        # Сохраняем в кэш-файл
+        printf "%s
+%s
+%s
+" "$p_status" "${t_status:-}" "$h_status" > "${_STATUS_CACHE}" 2>/dev/null
+    } &
+    disown 2>/dev/null || true
+}
+
+_main_menu_load_cache() {
+    # Читаем из кэша если он свежее 10 секунд
+    if [ -f "${_STATUS_CACHE}" ]; then
+        local age; age=$(( $(date +%s) - $(stat -c %Y "${_STATUS_CACHE}" 2>/dev/null || echo 0) ))
+        if [ "$age" -lt 10 ]; then
+            local lines=()
+            while IFS= read -r line; do lines+=("$line"); done < "${_STATUS_CACHE}"
+            [ -n "${lines[0]:-}" ] && _PANEL_STATUS="${lines[0]}"
+            [ -n "${lines[1]:-}" ] && _TELEMT_STATUS="${lines[1]}"
+            [ -n "${lines[2]:-}" ] && _HYSTERIA_STATUS="${lines[2]}"
+        fi
+    fi
 }
 
 main_menu() {
-    # Загружаем статус один раз при входе
+    # Инициализируем статус (быстрая часть) + запускаем фоновое обновление
+    _PANEL_STATUS="${GRAY}○ ...${NC}"
+    _TELEMT_STATUS="${GRAY}○ ...${NC}"
+    _HYSTERIA_STATUS="${GRAY}○ ...${NC}"
     _main_menu_refresh_status
     while true; do
+        _main_menu_load_cache  # Подхватываем результат фонового обновления если готов
         clear
         echo ""
         echo -e "${BOLD}${PURPLE}  SERVER-MANAGER${NC}${GRAY}  ${SCRIPT_VERSION}${NC}"
@@ -4166,13 +4218,15 @@ main_menu() {
         echo ""
         local ch; read -rp "  Выбор: " ch
         case "$ch" in
-            1) panel_menu || true;    _main_menu_refresh_status ;;
-            2) telemt_section || true; _main_menu_refresh_status ;;
-            3) hysteria_menu || true;  _main_menu_refresh_status ;;
-            4) migrate_menu || true;  _main_menu_refresh_status ;;
+            1) panel_menu || true ;;
+            2) telemt_section || true ;;
+            3) hysteria_menu || true ;;
+            4) migrate_menu || true ;;
             0) exit 0 ;;
             *) warn "Неверный выбор" ;;
         esac
+        # Запускаем фоновое обновление статуса
+        _main_menu_refresh_status
     done
 }
 
