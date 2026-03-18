@@ -13,7 +13,10 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# Версия обновляется автоматически при каждом сохранении файла
 SCRIPT_VERSION=$(date -r "$0" +'v%y%m.%d%H%M' 2>/dev/null || echo "v0000.000000")
+# SCRIPT_VERSION_STATIC — используется для сравнения версий при обновлении
+SCRIPT_VERSION_STATIC="v2603.181008"
 
 # ═══════════════════════════════════════════════════════════════════
 # ЦВЕТА И ОБЩИЕ УТИЛИТЫ
@@ -1419,7 +1422,7 @@ get_telemt_version() {
 }
 
 get_hysteria_version() {
-    /usr/local/bin/hysteria version 2>/dev/null | awk '/^Version:/{print $2; exit}' || true
+    /usr/local/bin/hysteria version 2>/dev/null | awk '/^Version:/{v=$2; sub(/^v/,"",v); print v; exit}' || true
 }
 
 
@@ -1477,10 +1480,11 @@ panel_update_script() {
     info "Проверяем обновления..."
     local remote; remote=$(curl -fsSL "$script_url" 2>/dev/null)
     [ -z "$remote" ] && { warn "Не удалось получить скрипт с GitHub"; return 1; }
-    local remote_ver; remote_ver=$(echo "$remote" | grep "^SCRIPT_VERSION=" | head -1 | sed 's/SCRIPT_VERSION=//;s/[^a-zA-Z0-9._-]//g' | tr -d ' ')
-    local local_ver; local_ver=$(date -r "$0" +'v%y%m.%d%H%M' 2>/dev/null || echo "unknown")
+    # Берём SCRIPT_VERSION_STATIC — статическую строку, не команду
+    local remote_ver; remote_ver=$(echo "$remote" | grep "^SCRIPT_VERSION_STATIC=" | head -1         | sed 's/SCRIPT_VERSION_STATIC=//;s/[^a-zA-Z0-9._-]//g' | tr -d ' ')
+    local local_ver; local_ver="$SCRIPT_VERSION"
     info "Локальная версия: $local_ver"
-    info "Версия на GitHub: $remote_ver"
+    info "Версия на GitHub: ${remote_ver:-неизвестна (нет SCRIPT_VERSION_STATIC)}"
     echo ""
     read -rp "  Обновить? (y/n): " ch < /dev/tty
     [[ "$ch" =~ ^[yY]$ ]] || { info "Отменено"; return; }
