@@ -1100,7 +1100,9 @@ do_status() {
             || echo -e "  ${RED}○${NC} $c"
     done
     echo ""
-    docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null |         grep -E "remnawave|remnanode" | sort |         awk -F"\t" '{printf "  %-36s %6s   %s\n", $1, $2, $3}' 
+    docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null \
+        | grep -E "remnawave|remnanode" | sort \
+        | awk -F"\t" '{printf "  %-36s %6s   %s\n", $1, $2, $3}'
 }
 do_logs() {
     local s="${1:-panel}"; cd "$DIR"
