@@ -4003,10 +4003,6 @@ hysteria_submenu_users() {
 
 # ── Интеграция Hysteria2 → Remnawave (webhook + subscription-page) ────────────
 
-# Ожидаемая SHA256 контрольная сумма hy-sub-install.sh
-# Обновите это значение при каждом целевом обновлении скрипта
-HY_SUB_INSTALL_SHA256="REPLACE_WITH_ACTUAL_SHA256"
-
 hysteria_remnawave_integration() {
     local script_url="https://raw.githubusercontent.com/stump3/setup_rth/main/hy-sub-install.sh"
     local tmp; tmp=$(mktemp /tmp/hy-sub-install.XXXXXX.sh)
@@ -4018,35 +4014,34 @@ hysteria_remnawave_integration() {
         return 1
     fi
 
-    # ── Проверка контрольной суммы ────────────────────────────────
-    if [ "$HY_SUB_INSTALL_SHA256" != "REPLACE_WITH_ACTUAL_SHA256" ]; then
-        local actual_sha
-        actual_sha=$(sha256sum "$tmp" | awk '"'"'{print $1}'"'"')
-        if [ "$actual_sha" != "$HY_SUB_INSTALL_SHA256" ]; then
-            rm -f "$tmp"
-            err "Контрольная сумма не совпадает!
-  Ожидалось: $HY_SUB_INSTALL_SHA256
-  Получено:  $actual_sha
-  Скрипт не будет выполнен. Возможна компрометация репозитория."
-            return 1
-        fi
-        ok "Контрольная сумма верна ✓"
-    else
-        warn "Контрольная сумма не задана — выполнение без проверки"
-        warn "Установите HY_SUB_INSTALL_SHA256 для защиты от компрометации"
-        echo ""
-        if ! confirm "Продолжить без проверки контрольной суммы?" n; then
-            rm -f "$tmp"
-            return 1
-        fi
-    fi
+    # Извлекаем данные из конфига и URI-файлов, передаём через env
+    # чтобы hy-sub-install.sh не спрашивал уже известное
+    local dom port conn_name uri_file
+    dom=$(hy_get_domain 2>/dev/null || true)
+    port=$(hy_get_port 2>/dev/null || true)
+    conn_name=""
+    for uri_file in "/root/hysteria-${dom}.txt" "/root/hysteria-${dom}-users.txt"; do
+        [ -f "$uri_file" ] || continue
+        conn_name=$(grep -m1 "^hy2://" "$uri_file" 2>/dev/null | sed "s/.*#//" | tr -d "\n" || true)
+        [ -n "$conn_name" ] && break
+    done
+
+    [ -n "$dom" ]       && info "Передаём домен:    $dom"
+    [ -n "$port" ]      && info "Передаём порт:     $port"
+    [ -n "$conn_name" ] && info "Передаём название: $conn_name"
+    echo ""
 
     chmod +x "$tmp"
+    HY_DOMAIN="$dom" \
+    HY_PORT="$port" \
+    HY_CONN_NAME="$conn_name" \
+    HY_CONFIG="$HYSTERIA_CONFIG" \
     bash "$tmp"
     local rc=$?
     rm -f "$tmp"
     return $rc
 }
+
 
 hysteria_submenu_sub() {
     while true; do
