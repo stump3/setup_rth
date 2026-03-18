@@ -1934,15 +1934,15 @@ panel_menu() {
         echo ""
     fi
     echo -e "  ${BOLD}1)${RESET}  🔧  Установка"
-    echo -e "  ${BOLD}2)${RESET}  ⚙️   Управление"
+    echo -e "  ${BOLD}2)${RESET}  ⚙️  Управление"
     echo -e "  ${BOLD}3)${RESET}  🌐  WARP Native"
     echo -e "  ${BOLD}4)${RESET}  🎨  Страница подписки"
-    echo -e "  ${BOLD}5)${RESET}  🖼️   Selfsteal шаблон"
+    echo -e "  ${BOLD}5)${RESET}  🖼️  Selfsteal шаблон"
     echo -e "  ${BOLD}6)${RESET}  🔄  Обновить скрипт"
     echo -e "  ${BOLD}7)${RESET}  📦  Миграция на другой сервер"
-    echo -e "  ${BOLD}8)${RESET}  🗑️   Удалить панель"
+    echo -e "  ${BOLD}8)${RESET}  🗑️  Удалить панель"
     echo ""
-    echo -e "  ${BOLD}0)${RESET}  ◀️   Назад"
+    echo -e "  ${BOLD}0)${RESET}  ◀️  Назад"
     echo ""
     local ch; read -rp "  Выбор: " ch < /dev/tty
     case "$ch" in
