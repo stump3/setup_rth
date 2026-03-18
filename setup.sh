@@ -1997,15 +1997,15 @@ panel_submenu_manage() {
     [ -x "$PANEL_MGMT_SCRIPT" ] || { warn "Панель не установлена."; return; }
     case "$ch" in
         1)  "$PANEL_MGMT_SCRIPT" logs ;;
-        2)  "$PANEL_MGMT_SCRIPT" status ;;
-        3)  "$PANEL_MGMT_SCRIPT" restart ;;
-        4)  "$PANEL_MGMT_SCRIPT" start ;;
-        5)  "$PANEL_MGMT_SCRIPT" update ;;
-        6)  "$PANEL_MGMT_SCRIPT" ssl ;;
-        7)  "$PANEL_MGMT_SCRIPT" backup ;;
-        8)  "$PANEL_MGMT_SCRIPT" health ;;
-        9)  "$PANEL_MGMT_SCRIPT" open_port ;;
-        10) "$PANEL_MGMT_SCRIPT" close_port ;;
+        2)  "$PANEL_MGMT_SCRIPT" status; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        3)  "$PANEL_MGMT_SCRIPT" restart; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        4)  "$PANEL_MGMT_SCRIPT" start; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        5)  "$PANEL_MGMT_SCRIPT" update; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        6)  "$PANEL_MGMT_SCRIPT" ssl; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        7)  "$PANEL_MGMT_SCRIPT" backup; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        8)  "$PANEL_MGMT_SCRIPT" health; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        9)  "$PANEL_MGMT_SCRIPT" open_port; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
+        10) "$PANEL_MGMT_SCRIPT" close_port; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
         11) panel_cli ;;
         12) panel_reinstall_mgmt || true; read -rp "  Нажмите Enter для продолжения..." < /dev/tty ;;
         0)  return ;;
@@ -4266,7 +4266,7 @@ main_menu() {
         echo ""
         echo -e "${GRAY}  ────────────────────────────────────────────${NC}"
         echo ""
-        echo -e "  ${BOLD}1)${RESET}  🛡️   Remnawave Panel"
+        echo -e "  ${BOLD}1)${RESET}  🛡️  Remnawave Panel"
         echo -e "  ${BOLD}2)${RESET}  📡  MTProxy (telemt)"
         echo -e "  ${BOLD}3)${RESET}  🚀  Hysteria2"
         echo -e "  ${BOLD}4)${RESET}  📦  Перенос"
